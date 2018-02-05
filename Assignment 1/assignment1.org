@@ -1,0 +1,724 @@
+#+TITLE: Assignment 1: OpenMP
+#+AUTHOR: Evan Bradley
+#+DATE: 2018-01-31
+#+STARTUP: overview
+
+* Setup
+The first half of the code is merely devoted to setup. Preprocessor directives
+for including libraries and defining a macro for evaluating the maximum of
+two integers are written. 
+#+BEGIN_SRC c :tangle assignment1.c
+/*
+ * assignment1.c
+ * Author: Evan Bradley
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <sys/timeb.h>
+#include <string.h>
+#include <omp.h>
+
+#define max(a, b) ((a) > (b) ? (a) : (b))
+#+END_SRC
+Then a function from matvec.c is included for timing
+the runtime of the functions.
+#+BEGIN_SRC c :tangle assignment1.c
+/* 
+ * The following function is taken from matvec.c on the Moodle coursepage.
+ */
+double read_timer() {
+    struct timeb tm;
+    ftime(&tm);
+    return (double) tm.time + (double) tm.millitm / 1000.0;
+}
+#+END_SRC
+
+
+To check the bins for validity, the sum of the difference between each
+bin is calculated and returned.
+#+BEGIN_SRC c :tangle assignment1.c
+int check_bins(int A[], int B[]) {
+    int i, sum = 0;
+
+    for (i = 0; i < 10; i++) {
+        sum += A[i] - B[i];
+    }
+
+    return sum;
+}
+
+int check_matrices(int N, int **A, int **B) {
+    int sum = 0;
+
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            sum += A[i][j] - B[i][j];
+        }
+    }
+
+    return sum;
+}
+#+END_SRC
+
+To test the speed of each algorithm, I defined a number of similar functions
+that take in the size of the matrix N, the matrix A (as a pointer to an array
+of pointers), and the number of threads. The maximum functions simply return a
+maximum integer. The histogram functions, on the other hand, take a variable
+to hold the count of numbers found in each bin, along with the maximum number
+to calculate the bin size.
+#+BEGIN_SRC c :tangle assignment1.c
+void init(int N, int M, int **A);
+void init_1(int N, int M, int **A, int num_threads);
+void init_2(int N, int M, int **A, int num_threads);
+void init_3(int N, int M, int **A, int num_threads);
+int  maximum(int N, int **A);
+int  maximum_1(int N, int **A, int num_threads);
+int  maximum_2(int N, int **A, int num_threads);
+int  maximum_3(int N, int **A, int num_threads);
+void hist(int N, int M, int **A, int bins[]);
+void hist_1(int N, int M, int **A, int bins[], int num_threads);
+void hist_2(int N, int M, int **A, int bins[], int num_threads);
+void hist_3(int N, int M, int **A,
+                                 int bins[], int num_threads);
+#+END_SRC
+
+The main function first declares variables for use in testing, then parses the
+command-line arguments, which are the size of the array, size of the max element,
+and number of threads, in that order. The rand function is seeded with a specified
+value to make the experiments reproducable. To ensure memory issues with stack
+variables are not encountered, the matrix A is placed in dynamically-allocated
+memory.
+#+BEGIN_SRC c :tangle assignment1.c
+int main(int argc, char *argv[]) {
+    int N, M;
+    int num_threads = 5;
+    double time_init, time_init_1, time_init_2,
+           time_init_3;
+    double time_max, time_max_1, time_max_2,
+           time_max_3;
+    double time_hist, time_hist_1, time_hist_2,
+           time_hist_3;
+    int max_base, max_1, max_2, max_3;
+    if (argc < 4) {
+        fprintf(stderr, "Usage: hw1 <n> <m> <t>\n");
+        exit(1);
+    }
+    N = atoi(argv[1]);
+    M = atoi(argv[2]);
+    num_threads = atoi(argv[3]);
+    int** A = (int **) malloc(N * sizeof(int *));
+    for (int i = 0; i < N; i++)
+         A[i] = (int *) malloc(N * sizeof(int));
+
+    int** A_1 = (int **) malloc(N * sizeof(int *));
+    for (int i = 0; i < N; i++)
+         A_1[i] = (int *) malloc(N * sizeof(int));
+
+    int** A_2 = (int **) malloc(N * sizeof(int *));
+    for (int i = 0; i < N; i++)
+         A_2[i] = (int *) malloc(N * sizeof(int));
+
+    int** A_3 = (int **) malloc(N * sizeof(int *));
+    for (int i = 0; i < N; i++)
+         A_3[i] = (int *) malloc(N * sizeof(int));
+
+    int bins[10] = { };
+    int bins_1[10] = { };
+    int bins_2[10] = { };
+    int bins_3[10] = { };
+
+    srand((1 << 12));
+    //printf("Diff (A, A_1): %d\n", check_matrices(N, A, A_1));
+#+END_SRC
+
+To time the functions, the timer is first read into a variable, the function
+is run, then the difference between the time before and after the function
+ran is assigned to the variable.
+#+BEGIN_SRC c :tangle assignment1.c
+    time_init = read_timer();
+    init(N, M, A);
+    time_init = (read_timer() - time_init);
+
+    time_init_1 = read_timer();
+    init_1(N, M, A_1, num_threads);
+    time_init_1 = (read_timer() - time_init_1);
+
+    time_init_2 = read_timer();
+    init_2(N, M, A_2, num_threads);
+    time_init_2 = (read_timer() - time_init_2);
+
+    time_init_3 = read_timer();
+    init_3(N, M, A_3, num_threads);
+    time_init_3 = (read_timer() - time_init_3);
+
+    time_max = read_timer();
+    max_base = maximum(N, A);
+    time_max = (read_timer() - time_max);
+
+    time_max_1 = read_timer();
+    max_1 = maximum_1(N, A, num_threads);
+    time_max_1 = (read_timer() - time_max_1);
+
+    time_max_2 = read_timer();
+    max_2 = maximum_2(N, A, num_threads);
+    time_max_2 = (read_timer() - time_max_2);
+
+    time_max_3 = read_timer();
+    max_3 = maximum_3(N, A, num_threads);
+    time_max_3 = (read_timer() - time_max_3);
+
+    time_hist = read_timer();
+    hist(N, M, A, bins);
+    time_hist = (read_timer() - time_hist);
+
+    time_hist_1 = read_timer();
+    hist_1(N, M, A, bins_1, num_threads);
+    time_hist_1 = (read_timer() - time_hist_1);
+
+    time_hist_2 = read_timer();
+    hist_2(N, M, A, bins_2, num_threads);
+    time_hist_2 = (read_timer() - time_hist_2);
+
+    time_hist_3 = read_timer();
+    hist_3(N, M, A, bins_3, num_threads);
+    time_hist_3 = (read_timer() - time_hist_3);
+
+#+END_SRC
+
+After all functions have been timed, they are printed into a table for easy
+viewing with the time required to run each.
+#+BEGIN_SRC c :tangle assignment1.c
+    printf("Algorithm\tTime (ms)\n");
+    printf("init-base\t%.4f\n", time_init * 1.0e3);
+    printf("init-1\t\t%.4f\n", time_init_1 * 1.0e3);
+    printf("init-2\t\t%.4f\n", time_init_2 * 1.0e3);
+    printf("init-3\t\t%.4f\n", time_init_3 * 1.0e3);
+    printf("max_base\t%.4f\n", time_max * 1.0e3);
+    printf("max-1\t\t%.4f\n", time_max_1 * 1.0e3);
+    printf("max-2\t\t%.4f\n", time_max_2 * 1.0e3);
+    printf("max-3\t\t%.4f\n", time_max_3 * 1.0e3);
+    printf("hist-1\t\t%.4f\n", time_hist_1 * 1.0e3);
+    printf("hist-2\t\t%.4f\n", time_hist_2 * 1.0e3);
+    printf("hist-3\t\t%.4f\n", time_hist_3 * 1.0e3);
+    //printf("max_base\t max_1\t\t max_2\t max_3\t ");
+    //printf("hist_base\t hist_1\t\t hist_2\t hist_3\n");
+    /*printf("%.4f\t %.4f\t %.4f\t %.4f\t\t %.4f\t %.4f\t %.4f\t %.4f\n",
+           time * 1.0e3, time_1 * 1.0e3, time_2 * 1.0e3,
+           time_3 * 1.0e3, time_hist * 1.0e3,
+           time_hist_1 * 1.0e3, time_hist_2 * 1.0e3,
+           time_hist_3 * 1.0e3);*/
+    /*printf("%d\t\t %d\t\t %d\t\t %d\t\t\t %d\t\t %d\t\t %d\t\t %d\n",
+           (max_base - max_base), (max_base - max_p), (max_base - max_p_for),
+           (max_base - max_p_for_red), check_bins(bins, bins),
+           check_bins(bins, bins_1), check_bins(bins, bins_2),
+           check_bins(bins, bins_3));*/
+
+    printf("\n");
+
+    printf("max_base max_1\tmax_2\tmax_3\n");
+    printf("%d\t %d\t %d\t %d\n", max_base, max_1, max_2, max_3);
+
+    printf("\n");
+
+   printf("hist:\t");
+   for (int i = 0; i < 10; i++)
+       printf("%d ", bins[i]);
+   printf("\n");
+
+   printf("hist_1:\t");
+   for (int i = 0; i < 10; i++)
+       printf("%d ", bins_1[i]);
+   printf("\n");
+
+   printf("hist_2:\t");
+   for (int i = 0; i < 10; i++)
+       printf("%d ", bins_2[i]);
+   printf("\n");
+
+   printf("hist_3:\t");
+   for (int i = 0; i < 10; i++)
+       printf("%d ", bins_3[i]);
+   printf("\n");
+#+END_SRC
+
+Finally, the pointers contained by A are free, followed by freeing A
+itself and returning. This concludes the main method, with the pertinent
+function implementations following it.
+#+BEGIN_SRC c :tangle assignment1.c
+    for (int i = 0; i < N; i++)
+        free(A[i]);
+
+    free(A);
+
+    for (int i = 0; i < N; i++)
+        free(A_1[i]);
+
+    free(A_1);
+
+    for (int i = 0; i < N; i++)
+        free(A_2[i]);
+
+    free(A_2);
+
+    for (int i = 0; i < N; i++)
+        free(A_3[i]);
+
+    free(A_3);
+
+    return 0;
+}
+#+END_SRC
+* Initializing the arary
+** Serial
+   The matrix is initialized by generating random numbers in the range [0, M).
+#+BEGIN_SRC c :tangle assignment1.c
+void init(int N, int M, int** A) {
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            A[i][j] = rand() % M;
+        }
+    }
+}
+#+END_SRC
+** Using the parallel directive
+   The parallel directive is employed by getting the id of each thread,
+   and using that to divide the matrix into chunks to be processed in parallel.
+
+#+BEGIN_SRC c :tangle assignment1.c
+void init_1(int N, int M, int** A, int num_threads) {
+    #pragma omp parallel num_threads(num_threads)
+    {
+		    int tid = omp_get_thread_num();
+        int Nt0 = tid * N / num_threads;
+        int Nt = (tid + 1) * N / num_threads;
+        for (int i = Nt0; i < Nt; i++) {
+            for (int j = 0; j < N; j++) {
+                A[i][j] = rand() % M;
+            }
+        }
+    }
+}
+#+END_SRC
+
+** Using the for directive
+   The for directive is easily applied to the matrix initialization, as OpenMP
+   will automatically divide the original array into portions for each thread.
+
+#+BEGIN_SRC c :tangle assignment1.c
+void init_2(int N, int M, int **A, int num_threads) {
+    #pragma omp parallel for schedule(dynamic) num_threads(num_threads)
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+              A[i][j] = rand() % M;
+        }
+    }
+}
+#+END_SRC
+
+** Using the for directive with the collapse clause
+   The reduction clause cannot be used on pointers (the target data type for
+   this function), so the collapse clause was used in its place.
+
+#+BEGIN_SRC c :tangle assignment1.c
+void init_3(int N, int M, int **A, int num_threads) {
+    #pragma omp parallel for schedule(dynamic) num_threads(num_threads) collapse(2)
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+              A[i][j] = rand() % M;
+        }
+    }
+}
+#+END_SRC
+
+* Maximum element of the array
+  The first task in the assignment was to find the maximum elements, which was
+  accomplished by simply looping through the array and testing for the max
+  element at each element. This gives a runtime of \(\Theta(n^2)\), which
+  is the theoretical lower bound for such a function.
+
+** Serial execution method for finding the max element
+   The serial execution method follows the description above: each element of
+   the matrix is accessed through two for-loops, testing for the maximum
+   along the way.
+#+BEGIN_SRC c :tangle assignment1.c
+int maximum(int N, int **A) {
+    int i, j, max_element = 0;
+    for (i = 0; i < N; i++) {
+        for (j = 0; j < N; j++) {
+            max_element = max(max_element, A[i][j]);
+        }
+    }
+
+    return max_element;
+}
+#+END_SRC
+
+** Using the parallel directive
+   The version using the parallel directive splits the code into threads that
+   each take a portion of the array, searching for the maximum within their
+   sub-arrays. After the parallel block, the maximum for each thread is tested
+   against the final maximum to find the actual maximum element.
+#+BEGIN_SRC c :tangle assignment1.c
+int maximum_1(int N, int **A, int num_threads) {
+    int max_element = 0;
+    int max_elements[num_threads];
+    int n;
+
+    for (n = 0; n < num_threads; n++)
+        max_elements[n] = 0;
+
+ #pragma omp parallel num_threads(num_threads)
+	{
+		int tid = omp_get_thread_num();
+        int Nt0 = tid * N / num_threads;
+        int Nt = (tid + 1) * N / num_threads;
+        int i, j;
+        for (i = Nt0; i < Nt; i++) {
+            for (j = 0; j < N; j++) {
+                max_elements[tid] = max(max_elements[tid], A[i][j]);
+            }
+        }
+    }
+
+    for (n = 0; n < num_threads; n++)
+        max_element = max(max_element, max_elements[n]);
+
+    return max_element;
+}
+#+END_SRC
+
+** Using the for directive
+   Using the for directive greatly simplifies the code, but also requires a
+   reconsideration of how to search the matrix. Instead of per-thread maximums,
+   which would require the costly omp_get_thread_num function, a critical
+   section is placed at the end of searching through each sub-array. This will
+   cause the code to block for the critical sections \(N\) times, which is
+   sub-optimal, but as we will see, still results in a speedup.
+#+BEGIN_SRC c :tangle assignment1.c
+int maximum_2(int N, int **A, int num_threads) {
+    int max_element = 0;
+    int local_max_element = 0;
+
+    #pragma omp parallel for schedule(dynamic) num_threads(num_threads) \
+            firstprivate(local_max_element)
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            local_max_element = max(local_max_element, A[i][j]);
+        }
+
+        #pragma omp critical
+        max_element = max(max_element, local_max_element);
+    }
+
+    return max_element;
+}
+#+END_SRC
+
+** Using the for directive with the reduction clause
+   The reduction clause is by far the simplest and fastest of the parallel
+   functions. It keeps a local max_element variable for each thread, taking
+   the max of those elements at the end of the parallel block. This combines
+   the non-blocking nature of the plain parallel directive with the flexibility
+   of the for directive, which accounts for this speedup.
+#+BEGIN_SRC c :tangle assignment1.c
+int maximum_3(int N, int **A, int num_threads) {
+    int max_element = 0;
+
+    #pragma omp parallel for schedule(dynamic) \
+            reduction(max: max_element) num_threads(num_threads)
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            max_element = max(max_element, A[i][j]);
+        }
+    }
+
+    return max_element;
+}
+#+END_SRC
+
+* Calculating histogram bins
+  Calculating the histogram bins required more sophistication overall, as it
+  necessitated tracking an array as opposed to a single variable.
+
+** Serial execution method for calculating the bin counts
+   Serial calculation of the bins involved simply looping over the matrix like
+   the previous algorithms, but calculating the index of the bin to increment.
+   The index is given by the equation \(\frac{n}{M} \cdot 10\) for an element
+   \(n\) in the matrix. This is rearranged in the C code to force integer
+   division without casting.
+
+#+BEGIN_SRC c :tangle assignment1.c
+void hist(int N, int M, int **A, int bins[]) {
+    int i, j, idx;
+
+    for (i = 0; i < N; i++) {
+        for (j = 0; j < N; j++) {
+            bins[(A[i][j]  * 10) / M] += 1;
+        }
+    }
+}
+#+END_SRC
+
+** Calculating the bin counts with the parallel directive
+   As with the previous parallel-directive algorithm, execution will divide
+   into threads, which store the bin counts in local arrays, which take the form
+   of the local_bins variable, indexed by the number of the thread. These are
+   then summed into the final bin count after the parallel block.
+
+#+BEGIN_SRC c :tangle assignment1.c
+void hist_1(int N, int M, int **A, int bins[], int num_threads) {
+    int local_bins[num_threads][10];
+    for (int i = 0; i < num_threads; i++) {
+        for (int j = 0; j < 10; j++) {
+            local_bins[i][j] = 0;
+        }
+    }
+
+ #pragma omp parallel num_threads(num_threads)
+    {
+        int tid = omp_get_thread_num();
+        int Nt0 = tid * N / num_threads;
+        int Nt = (tid + 1) * N / num_threads;
+        int i, j;
+
+        for (i = Nt0; i < Nt; i++) {
+            for (j = 0; j < N; j++) {
+                local_bins[tid][(A[i][j]  * 10) / M] += 1;
+            }
+        }
+    }
+
+    for (int i = 0; i < 10; i++) {
+        for (int j = 0; j < num_threads; j++) {
+            bins[i] += local_bins[j][i];
+        }
+    }
+}
+#+END_SRC
+
+** Using the for directive
+   The for directive for this algorithm works similar to the algorithm
+   using a for directive to calculate the max element. An array of
+   local bins for this loop is declared, which are collected before accumulation
+   into the final bins inside a critical section.
+
+#+BEGIN_SRC c :tangle assignment1.c
+void hist_2(int N, int M, int **A,
+                       int bins[], int num_threads) {
+    #pragma omp parallel for schedule(dynamic) num_threads(num_threads)
+    for (int i = 0; i < N; i++) {
+        int local_bins[10] = {  };
+
+        for (int j = 0; j < N; j++) {
+            local_bins[(A[i][j]  * 10) / M] += 1;
+        }
+
+        #pragma omp critical
+        for (int k = 0; k < 10; k++) {
+            bins[k] += local_bins[k];
+        }
+    }
+}
+#+END_SRC
+
+** Using the for directive with the reduction clause
+   Using the reduction clause, the accumulation of the local bins into the final
+   bins is implicit, resulting in a decrease in code with a similar runtime.
+
+#+BEGIN_SRC c :tangle assignment1.c
+void hist_3(int N, int M, int **A,
+                                 int bins[], int num_threads) {
+    #pragma omp parallel for schedule(dynamic) \
+            reduction(+: bins[:10]) num_threads(num_threads)
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            bins[(A[i][j]  * 10) / M] += 1;
+        }
+    }
+}
+#+END_SRC
+
+
+* Experimental Results
+  The program was run with \(N = 10, 10^2, 10^4\) and \(M = 100, 1000\) to
+  test the runtimes of the algorithms. The code was run on the Yoko server, with
+  a Intel(R) Xeon(R) CPU E5-2683 v3 @ 2.00GHz processor and 56 cores. The code is
+  correct, so no errors were encountered during any executions. The full program output
+  has been placed in an included text file, with the maximum element and number of elements
+  in each bin for each run. It should be noted that the runtime for
+  both algorithms is a function of $N$, so the size of $M$ does not significantly
+  affect runtime. Note that unless otherwise specified, the algorithms using the for
+  directive use dynamic scheduling.
+
+** N = 10, M = 100, Threads = 5
+   At this size, the code just runs too quickly to make an accurate measurement with the
+   precision allowed by the computer. \\
+
+\begin{tabular}{c c}
+ Algorithm & Runtime (ms) \\
+ max-base & 0.0000 \\
+ max-p & 0.0000 \\
+ max-p-for & 0.0000 \\
+ max-p-for-reduc & 0.0000 \\
+ hist-base & 0.0000 \\
+ hist-p & 0.0000 \\
+ hist-p-for & 0.0000 \\
+ hist-p-for-reduc & 0.0000 \\
+\end{tabular}
+
+** N = 100, M = 1000, Threads = 5
+   Similarly, the code is able to run each of these too quickly for an accurate
+   measurement; the 1 ms recorded on hist-p could possibly be a statistical error,
+   considering the volatility of the runtimes. $M$ was increased to $1000$ for this
+   run and the subsequent run, owing to the increased size of $N$. \\
+
+\begin{tabular}{c c}
+ Algorithm & Runtime (ms) \\
+ max-base & 0.0000 \\
+ max-p & 0.0000 \\
+ max-p-for & 0.0000 \\
+ max-p-for-reduc & 0.0000 \\
+ hist-base & 0.0000 \\
+ hist-p & 1.0002 \\
+ hist-p-for & 0.0000 \\
+ hist-p-for-reduc & 0.0000 \\
+\end{tabular}
+
+** N = 1000, M = 1000, Threads = 5
+   Increasing $N$ to 1000 showed results for all algorithms, and indicated some
+   trends. First, the algorithms using only the parallel directive actually run
+   worse than their serial counterparts, due to the overhead of the call to
+   =omp_get_thread_num=. However, the for directive, with or without the
+   reduction clause, seems to show improvement over the serial code. \\
+
+\begin{tabular}{c c}
+ Algorithm & Runtime (ms) \\
+ max-base & 3.9999 \\
+ max-p & 7.0000 \\
+ max-p-for & 0.9999 \\
+ max-p-for-reduc & 1.0002 \\
+ hist-base & 13.0000 \\
+ hist-p & 15.0001 \\
+ hist-p-for & 3.0000 \\
+ hist-p-for-reduc & 3.0000 \\
+\end{tabular}
+
+** N = 10000, M = 100, Threads = 5
+   The trends in the previous execution are continued when increasing $N$
+   to $10000$. The for directive makes significant gains over the serial code
+   while the parallel directive likely suffers from overhead. Note that $M$
+   has been set to $100$ for this run, to compare against $1000$ in the next. \\
+
+\begin{tabular}{c c}
+ Algorithm & Runtime (ms) \\
+ max-base & 364.0001 \\
+ max-p & 486.0001 \\
+ max-p-for & 86.0000 \\
+ max-p-for-reduc & 74.0001 \\
+ hist-base & 930.0000 \\
+ hist-p & 1383.0001 \\
+ hist-p-for & 156.9998 \\
+ hist-p-for-reduc & 165.0000 \\
+\end{tabular}
+
+** N = 10000, M = 1000, Threads = 5
+   As suggested earlier, this run shows that $M$ has no effect on the runtime
+   of the algorithms; all runtimes are within standard variance for runtimes. \\
+
+\begin{tabular}{c c}
+ Algorithm & Runtime (ms) \\
+ max-base & 363.9998 \\
+ max-p & 464.0000 \\
+ max-p-for & 90.0002 \\
+ max-p-for-reduc & 83.9999 \\
+ hist-base & 868.0000 \\
+ hist-p & 1002.0001 \\
+ hist-p-for & 148.0000 \\
+ hist-p-for-reduc & 158.0000 \\
+\end{tabular}
+
+** N = 10000, M = 1000, Threads = 40 
+   Increasing the number of threads to $40$ dramatically improves runtime for the
+   parallel code, lowering the effect of overhead on the parallel directive
+   algorithms and continuing speed increases with the for directive algorithms. \\
+
+\begin{tabular}{c c}
+ Algorithm & Runtime (ms) \\
+ max-base & 346.9999 \\
+ max-p & 354.0001 \\
+ max-p-for & 62.0000 \\
+ max-p-for-reduc & 24.9999 \\
+ hist-base & 788.0001 \\
+ hist-p & 316.9999 \\
+ hist-p-for & 33.9999 \\
+ hist-p-for-reduc & 35.0001 \\
+\end{tabular}
+
+** N = 10000, M = 1000, Threads = 5 (static, 4)
+   Setting $N = 10000$ and $M = 1000$ with $5$ threads, static scheduling with
+   chunks of size $4$ was tested. This showed  a mild decrease in speed for
+   algorithms using the for directive, but no significant changes. \\
+
+\begin{tabular}{c c}
+ Algorithm & Runtime (ms) \\
+ max-base & 368.0000 \\
+ max-p & 441.0000 \\
+ max-p-for & 115.9999 \\
+ max-p-for-reduc & 105.0000 \\
+ hist-base & 769.0001 \\
+ hist-p & 756.0000 \\
+ hist-p-for & 169.9998 \\
+ hist-p-for-reduc & 206.0001 \\
+\end{tabular}
+
+** N = 10000, M = 1000, Threads = 5 (static, 64)
+   Setting the chunk size to $64$ did not appear to have a significant effect
+   on runtime, and all algorithms run within standard variance. \\
+
+\begin{tabular}{c c}
+ Algorithm & Runtime (ms) \\
+ max-base & 362.0000 \\
+ max-p & 498.0001 \\
+ max-p-for & 110.9998 \\
+ max-p-for-reduc & 105.0000 \\
+ hist-base & 1136.0002 \\
+ hist-p & 927.0000 \\
+ hist-p-for & 183.9998 \\
+ hist-p-for-reduc & 190.0001 \\
+\end{tabular}
+
+** N = 10000, M = 1000, Threads = 5 (static, 128)
+   Increasing the chunk size to $128$ appeared to have a slight improvement for
+   the maximizing algorithms using the for directive, but no other changes. These
+   changes are within variance, and are likely the result of statistical noise. \\
+
+\begin{tabular}{c c}
+ Algorithm & Runtime (ms) \\
+ max-base & 367.0001 \\
+ max-p & 482.0001 \\
+ max-p-for & 79.0000 \\
+ max-p-for-reduc & 77.9998 \\
+ hist-base & 1461.0000 \\
+ hist-p & 1142.9999 \\
+ hist-p-for & 183.0001 \\
+ hist-p-for-reduc & 169.9998 \\
+\end{tabular}
+
+** Conclusions
+   Overall, the parallel algorithms using the for directive appear to have the
+   most significant improvement over algorithms using only the parallel directive
+   and =omp_get_thread_num= to keep track of local data. It is likely that
+   =omp_get_thread_num= incurs overhead due to a query of the thread number, and
+   that this results in a substantial increase in runtime for instances where
+   it is frequently called. The addition of the reduction clause to algorithms
+   with the for directive appeared to have minimal impact aside from the cleaner
+   code, and in some cases even slowed down the runtime. Static scheduling with
+   a fixed chunk size did not appear to have a significant effect on runtime,
+   but it is possible that more chunk sizes would need to be tested to determine
+   an optimal chunk size. Similarly, more testing may reveal that dynamic scheduling
+   (or guided scheduling) are better options. Finally testing showed throughout
+   that the upper limit of the array had no significant impact on runtime. While
+   it is likely that operating with larger numbers has runtime implications on
+   a certain scale, these did not appear with the magnitudes of numbers used in
+   these experiments.
