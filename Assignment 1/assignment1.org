@@ -194,7 +194,7 @@ viewing with the time required to run each.
     printf("init-1\t\t%.4f\n", time_init_1 * 1.0e3);
     printf("init-2\t\t%.4f\n", time_init_2 * 1.0e3);
     printf("init-3\t\t%.4f\n", time_init_3 * 1.0e3);
-    printf("max_base\t%.4f\n", time_max * 1.0e3);
+    printf("max-base\t%.4f\n", time_max * 1.0e3);
     printf("max-1\t\t%.4f\n", time_max_1 * 1.0e3);
     printf("max-2\t\t%.4f\n", time_max_2 * 1.0e3);
     printf("max-3\t\t%.4f\n", time_max_3 * 1.0e3);
@@ -269,7 +269,7 @@ function implementations following it.
     return 0;
 }
 #+END_SRC
-* Initializing the arary
+* Initializing the array
 ** Serial
    The matrix is initialized by generating random numbers in the range [0, M).
 #+BEGIN_SRC c :tangle assignment1.c
@@ -539,7 +539,6 @@ void hist_3(int N, int M, int **A,
 }
 #+END_SRC
 
-
 * Experimental Results
   The program was run with \(N = 10, 10^2, 10^4\) and \(M = 100, 1000\) to
   test the runtimes of the algorithms. The code was run on the Yoko server, with
@@ -556,15 +555,18 @@ void hist_3(int N, int M, int **A,
    precision allowed by the computer. \\
 
 \begin{tabular}{c c}
- Algorithm & Runtime (ms) \\
- max-base & 0.0000 \\
- max-p & 0.0000 \\
- max-p-for & 0.0000 \\
- max-p-for-reduc & 0.0000 \\
- hist-base & 0.0000 \\
- hist-p & 0.0000 \\
- hist-p-for & 0.0000 \\
- hist-p-for-reduc & 0.0000 \\
+Algorithm &       Time (ms) \\ \hline
+init-base &       0.9999 \\
+init-1    &       0.0000 \\
+init-2    &       0.0000 \\
+init-3    &       1.0002 \\
+max-base  &       0.0000 \\
+max-1     &       0.0000 \\
+max-2     &       0.0000 \\
+max-3     &       0.0000 \\
+hist-1    &       0.0000 \\
+hist-2    &       0.9999 \\
+hist-3    &       0.0000 \\
 \end{tabular}
 
 ** N = 100, M = 1000, Threads = 5
@@ -574,15 +576,18 @@ void hist_3(int N, int M, int **A,
    run and the subsequent run, owing to the increased size of $N$. \\
 
 \begin{tabular}{c c}
- Algorithm & Runtime (ms) \\
- max-base & 0.0000 \\
- max-p & 0.0000 \\
- max-p-for & 0.0000 \\
- max-p-for-reduc & 0.0000 \\
- hist-base & 0.0000 \\
- hist-p & 1.0002 \\
- hist-p-for & 0.0000 \\
- hist-p-for-reduc & 0.0000 \\
+Algorithm &       Time (ms) \\ \hline
+init-base &       0.9999 \\  
+init-1    &       0.0000 \\ 
+init-2    &       0.9999 \\ 
+init-3    &       0.0000 \\ 
+max-base  &       0.0000 \\ 
+max-1     &       0.0000 \\ 
+max-2     &       1.0002 \\ 
+max-3     &       0.0000 \\ 
+hist-1    &       0.0000 \\ 
+hist-2    &       0.0000 \\ 
+hist-3    &       0.0000 \\ 
 \end{tabular}
 
 ** N = 1000, M = 1000, Threads = 5
@@ -593,15 +598,18 @@ void hist_3(int N, int M, int **A,
    reduction clause, seems to show improvement over the serial code. \\
 
 \begin{tabular}{c c}
- Algorithm & Runtime (ms) \\
- max-base & 3.9999 \\
- max-p & 7.0000 \\
- max-p-for & 0.9999 \\
- max-p-for-reduc & 1.0002 \\
- hist-base & 13.0000 \\
- hist-p & 15.0001 \\
- hist-p-for & 3.0000 \\
- hist-p-for-reduc & 3.0000 \\
+Algorithm &       Time (ms) \\ \hline
+init-base &       10.9999 \\
+init-1    &       11.0002 \\
+init-2    &       7.9999 \\
+init-3    &       35.0001 \\
+max-base  &       1.9999 \\
+max-1     &       3.0000 \\
+max-2     &       3.9999 \\
+max-3     &       1.0002 \\
+hist-1    &       3.9999 \\
+hist-2    &       4.9999 \\
+hist-3    &       1.0002 \\
 \end{tabular}
 
 ** N = 10000, M = 100, Threads = 5
@@ -611,15 +619,18 @@ void hist_3(int N, int M, int **A,
    has been set to $100$ for this run, to compare against $1000$ in the next. \\
 
 \begin{tabular}{c c}
- Algorithm & Runtime (ms) \\
- max-base & 364.0001 \\
- max-p & 486.0001 \\
- max-p-for & 86.0000 \\
- max-p-for-reduc & 74.0001 \\
- hist-base & 930.0000 \\
- hist-p & 1383.0001 \\
- hist-p-for & 156.9998 \\
- hist-p-for-reduc & 165.0000 \\
+Algorithm  &     Time (ms) \\ \hline
+init-base  &     852.0000 \\
+init-1     &     801.0001 \\
+init-2     &     814.9998 \\
+init-3     &     3341.0001 \\
+max-base   &     286.0000 \\
+max-1      &     370.0001 \\
+max-2      &     61.9998 \\
+max-3      &     62.0000 \\
+hist-1     &     419.9998 \\
+hist-2     &     118.0000 \\
+hist-3     &     137.0001 \\
 \end{tabular}
 
 ** N = 10000, M = 1000, Threads = 5
@@ -627,49 +638,61 @@ void hist_3(int N, int M, int **A,
    of the algorithms; all runtimes are within standard variance for runtimes. \\
 
 \begin{tabular}{c c}
- Algorithm & Runtime (ms) \\
- max-base & 363.9998 \\
- max-p & 464.0000 \\
- max-p-for & 90.0002 \\
- max-p-for-reduc & 83.9999 \\
- hist-base & 868.0000 \\
- hist-p & 1002.0001 \\
- hist-p-for & 148.0000 \\
- hist-p-for-reduc & 158.0000 \\
+Algorithm &       Time (ms) \\ \hline
+init-base &       829.9999 \\
+init-1    &       727.0000 \\
+init-2    &       740.0000 \\
+init-3    &       3319.0000 \\
+max-base  &       272.0001 \\
+max-1     &       368.0000 \\
+max-2     &       62.0000 \\
+max-3     &       62.0000 \\
+hist-1    &       418.9999 \\
+hist-2    &       120.0001 \\
+hist-3    &       138.9999 \\
 \end{tabular}
 
-** N = 10000, M = 1000, Threads = 40 
-   Increasing the number of threads to $40$ dramatically improves runtime for the
+** N = 10000, M = 1000, Threads = 8 
+   Increasing the number of threads to $8$ dramatically improves runtime for the
    parallel code, lowering the effect of overhead on the parallel directive
    algorithms and continuing speed increases with the for directive algorithms. \\
 
 \begin{tabular}{c c}
- Algorithm & Runtime (ms) \\
- max-base & 346.9999 \\
- max-p & 354.0001 \\
- max-p-for & 62.0000 \\
- max-p-for-reduc & 24.9999 \\
- hist-base & 788.0001 \\
- hist-p & 316.9999 \\
- hist-p-for & 33.9999 \\
- hist-p-for-reduc & 35.0001 \\
+Algorithm &       Time (ms) \\ \hline
+init-base &       846.0000 \\
+init-1    &       661.0000 \\
+init-2    &       676.0001 \\
+init-3    &       2577.9998 \\
+max-base  &       282.0001 \\
+max-1     &       318.0001 \\
+max-2     &       73.0000 \\
+max-3     &       53.0000 \\
+hist-1    &       350.0001 \\
+hist-2    &       110.9998 \\
+hist-3    &       128.0000 \\
 \end{tabular}
 
 ** N = 10000, M = 1000, Threads = 5 (static, 4)
    Setting $N = 10000$ and $M = 1000$ with $5$ threads, static scheduling with
-   chunks of size $4$ was tested. This showed  a mild decrease in speed for
-   algorithms using the for directive, but no significant changes. \\
+   chunks of size $4$ was tested. This showed a mild decrease in speed for
+   algorithms using the for directive, but no significant changes. The largest
+   change, by a substantial margin, is in the init\_3 function, which drops
+   in runtime significantly when it is run with static scheduling. This drop
+   will carry on with the subsequent chunk sizes. \\
 
 \begin{tabular}{c c}
- Algorithm & Runtime (ms) \\
- max-base & 368.0000 \\
- max-p & 441.0000 \\
- max-p-for & 115.9999 \\
- max-p-for-reduc & 105.0000 \\
- hist-base & 769.0001 \\
- hist-p & 756.0000 \\
- hist-p-for & 169.9998 \\
- hist-p-for-reduc & 206.0001 \\
+Algorithm &      Time (ms) \\ \hline
+init-base &       839.0000 \\
+init-1    &       665.9999 \\
+init-2    &       662.0002 \\
+init-3    &       763.9999 \\
+max-base  &       270.9999 \\
+max-1     &       344.0001 \\
+max-2     &       63.0000 \\
+max-3     &       66.9999 \\
+hist-1    &       425.0000 \\
+hist-2    &       119.9999 \\
+hist-3    &       149.0002 \\
 \end{tabular}
 
 ** N = 10000, M = 1000, Threads = 5 (static, 64)
@@ -677,15 +700,18 @@ void hist_3(int N, int M, int **A,
    on runtime, and all algorithms run within standard variance. \\
 
 \begin{tabular}{c c}
- Algorithm & Runtime (ms) \\
- max-base & 362.0000 \\
- max-p & 498.0001 \\
- max-p-for & 110.9998 \\
- max-p-for-reduc & 105.0000 \\
- hist-base & 1136.0002 \\
- hist-p & 927.0000 \\
- hist-p-for & 183.9998 \\
- hist-p-for-reduc & 190.0001 \\
+Algorithm &      Time (ms) \\ \hline
+init-base &      832.9999 \\
+init-1    &      757.0002 \\
+init-2    &      757.9999 \\
+init-3    &      857.0001 \\
+max-base  &      284.9998 \\
+max-1     &      372.0000 \\
+max-2     &      67.0002 \\
+max-3     &      64.9998 \\
+hist-1    &      446.0001 \\
+hist-2    &      125.9999 \\
+hist-3    &      148.0000 \\
 \end{tabular}
 
 ** N = 10000, M = 1000, Threads = 5 (static, 128)
@@ -694,15 +720,18 @@ void hist_3(int N, int M, int **A,
    changes are within variance, and are likely the result of statistical noise. \\
 
 \begin{tabular}{c c}
- Algorithm & Runtime (ms) \\
- max-base & 367.0001 \\
- max-p & 482.0001 \\
- max-p-for & 79.0000 \\
- max-p-for-reduc & 77.9998 \\
- hist-base & 1461.0000 \\
- hist-p & 1142.9999 \\
- hist-p-for & 183.0001 \\
- hist-p-for-reduc & 169.9998 \\
+Algorithm &      Time (ms) \\ \hline
+init-base &       839.9999 \\
+init-1    &       657.0001 \\
+init-2    &       664.0000 \\
+init-3    &       679.9998 \\
+max-base  &       302.0000 \\
+max-1     &       364.0001 \\
+max-2     &       66.0000 \\
+max-3     &       66.0000 \\
+hist-1    &       444.9999 \\
+hist-2    &       119.9999 \\
+hist-3    &       149.0002 \\
 \end{tabular}
 
 ** Conclusions
