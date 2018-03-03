@@ -1,0 +1,700 @@
+#+TITLE: Assignment 2: Pthreads
+#+AUTHOR: Evan Bradley
+#+DATE: 2018-03-07
+#+STARTUP: overview
+
+* Pthread barrier code for macOS
+Sourced from: http://blog.albertarmea.com/post/47089939939/using-pthreadbarrier-on-mac-os-x
+#+BEGIN_SRC c :tangle barriers.h
+  #ifdef __APPLE__
+
+  #ifndef PTHREAD_BARRIER_H_
+  #define PTHREAD_BARRIER_H_
+
+  #include <pthread.h>
+  #include <errno.h>
+
+  typedef int pthread_barrierattr_t;
+  typedef struct
+  {
+      pthread_mutex_t mutex;
+      pthread_cond_t cond;
+      int count;
+      int tripCount;
+  } pthread_barrier_t;
+
+
+  int pthread_barrier_init(pthread_barrier_t *barrier, const pthread_barrierattr_t *attr, unsigned int count)
+  {
+      if(count == 0)
+      {
+          errno = EINVAL;
+          return -1;
+      }
+      if(pthread_mutex_init(&barrier->mutex, 0) < 0)
+      {
+          return -1;
+      }
+      if(pthread_cond_init(&barrier->cond, 0) < 0)
+      {
+          pthread_mutex_destroy(&barrier->mutex);
+          return -1;
+      }
+      barrier->tripCount = count;
+      barrier->count = 0;
+
+      return 0;
+  }
+
+  int pthread_barrier_destroy(pthread_barrier_t *barrier)
+  {
+      pthread_cond_destroy(&barrier->cond);
+      pthread_mutex_destroy(&barrier->mutex);
+      return 0;
+  }
+
+  int pthread_barrier_wait(pthread_barrier_t *barrier)
+  {
+      pthread_mutex_lock(&barrier->mutex);
+      ++(barrier->count);
+      if(barrier->count >= barrier->tripCount)
+      {
+          barrier->count = 0;
+          pthread_cond_broadcast(&barrier->cond);
+          pthread_mutex_unlock(&barrier->mutex);
+          return 1;
+      }
+      else
+      {
+          pthread_cond_wait(&barrier->cond, &(barrier->mutex));
+          pthread_mutex_unlock(&barrier->mutex);
+          return 0;
+      }
+  }
+
+  #endif // PTHREAD_BARRIER_H_
+  #endif // __APPLE__
+#+END_SRC
+* Hash table with standard locks
+The basic setup for the hash table implementation was taken from
+=https://gist.github.com/tonious/1377667=, after a careful review of open-source
+hash table implementations. The basis for this code is used in =hash.h=, which
+adapts the code to be multithreaded using pthreads.
+
+** Setup
+The =entry= struct consists of a key-value pair and a pointer to another entry,
+constituting a linked list in the case of a collision. A hash table is defined
+as a struct containing a size and a pointer to an array. Both of these are given
+their own types for easier use.
+#+BEGIN_SRC c :tangle hash.h
+  #include <stdlib.h>
+  #include <limits.h>
+  #include <string.h>
+  #include <pthread.h>
+
+  #include <execinfo.h>
+  #include <signal.h>
+  #include <stdlib.h>
+
+  #define MUTEX_COUNT 16
+
+  struct entry_s {
+    char *key;
+    char *value;
+    struct entry_s *next;
+  };
+
+  typedef struct entry_s entry_t;
+
+  struct hashtable_s {
+    unsigned int size;
+    unsigned int bins;
+    pthread_mutex_t **locks;
+    entry_t **table;
+  };
+
+  typedef struct hashtable_s hashtable_t;
+
+  struct kv_s {
+    char **keys;
+    char **values;
+  };
+
+  typedef struct kv_s kv_t;
+
+  struct ht_arg_s {
+    hashtable_t *hashtable;
+    kv_t *input;
+    unsigned input_len;
+    kv_t *output;
+    unsigned output_len;
+    unsigned threads;
+    void (*cb)(void*, int, void*);
+    unsigned count;
+    pthread_mutex_t count_mut;
+    pthread_barrier_t barrier;
+  };
+
+  typedef struct ht_arg_s ht_arg_t;
+
+  /*typedef struct {
+    kv_t *kv;
+
+    } work_queue;*/
+
+  pthread_mutex_t mutexes[MUTEX_COUNT];
+
+#+END_SRC
+
+** Key-value pairs creation
+To test the hash table, a series of key-value pairs are created to test the hash
+table.
+#+BEGIN_SRC c :tangle hash.h
+  char *rand_string(char *str, size_t size) {
+    const char charset[] = "abcdefghijklmnopqrstuvwxyz";
+    if (size) {
+      --size;
+      for (size_t n = 0; n < size; n++) {
+        int key = rand() % (int) (sizeof charset - 1);
+        str[n] = charset[key];
+      }
+      str[size] = '\0';
+    }
+    return str;
+  }
+
+  void init_kv(kv_t *key_val, unsigned len, unsigned num) {
+    if((key_val->keys = malloc(sizeof(char*) * num)) == NULL) {
+      return;
+    }
+
+    if((key_val->values = malloc(sizeof(char*) * num)) == NULL) {
+      return;
+    }
+
+    for (unsigned i = 0; i < num; i++) {
+      char *key = malloc(sizeof(char) * len);
+      char *value = malloc(sizeof(char) * len);
+      key_val->keys[i] = rand_string(key, len);
+      key_val->values[i] = rand_string(value, len);
+    }
+  }
+#+END_SRC
+** Hash table creation
+Hash table creation involves allocating heap space for the hash table struct and
+each entry in the array.
+#+BEGIN_SRC c :tangle hash.h
+  /* Create a new hashtable. */
+  hashtable_t *ht_create( unsigned int size, unsigned int bins ) {
+
+    hashtable_t *hashtable = NULL;
+    unsigned int i;
+
+    if( size < 1 ) return NULL;
+
+    /* Allocate the table itself. */
+    if( ( hashtable = malloc( sizeof( hashtable_t ) ) ) == NULL ) {
+      return NULL;
+    }
+
+    /* Allocate pointers to the head nodes. */
+    if( ( hashtable->table = malloc( sizeof( entry_t * ) * size ) ) == NULL ) {
+      return NULL;
+    }
+
+    for( i = 0; i < size; i++ ) {
+      hashtable->table[i] = NULL;
+    }
+
+    hashtable->bins = bins;
+
+    if( ( hashtable->locks = malloc( sizeof( pthread_mutex_t * ) * bins) ) == NULL ) {
+      return NULL;
+    }
+
+    for( i = 0; i < hashtable->bins; i++ ) {
+      pthread_mutex_init((pthread_mutex_t *)(&hashtable->locks[i]), NULL);
+    }
+
+    hashtable->size = size;
+
+    return hashtable;
+  }
+#+END_SRC
+
+** Insertion
+Inserting a new value into the hash table involves hashing the given string into
+an array index, then creating a new key-value pair struct for insertion into the
+table. In the case of a collision, the entry is inserted
+*** Hash function
+The hash function used is a critical component of the hash table: ensuring a
+good distribution of values will keep worst-case access times low by minimizing
+the number of linked-list traversals. Here, the standard division method is
+used, wherein the string is converted to an unsigned long integer, then is
+reduced to an index in the array by getting the value of the resulting number
+mod the size of the hash table.
+#+BEGIN_SRC c :tangle hash.h
+  /* Hash a string for a particular hash table. */
+  int ht_hash(unsigned int size, char *key) {
+    unsigned long int hashval = 0;
+    unsigned int i = 0;
+
+    /* Convert our string to an integer */
+    while( hashval < ULONG_MAX && i < strlen( key ) ) {
+      hashval = hashval << 8;
+      hashval += key[ i ];
+      i++;
+    }
+
+    return hashval % size;
+  }
+
+  unsigned hash_board(unsigned size, uint8_t board[4][4]) {
+    unsigned long hashval = 0;
+    unsigned i = 0;
+
+    /* Convert our string to an integer */
+    while(hashval < ULONG_MAX && i < 16) {
+      hashval = hashval << 8;
+      hashval += board[i / 4][i % 4];
+      i++;
+    }
+
+    return hashval % size;
+  }
+#+END_SRC
+
+*** Creating a new key-value pair
+Creating the pair is simple: the string values for each are copied into the
+struct to be inserted into the hash table.
+#+BEGIN_SRC c :tangle hash.h
+  /* Create a key-value pair. */
+  entry_t *ht_newpair( char *key, char *value ) {
+    entry_t *newpair;
+
+    if( ( newpair = malloc( sizeof( entry_t ) ) ) == NULL ) {
+      return NULL;
+    }
+
+    if( ( newpair->key = strdup( key ) ) == NULL ) {
+      return NULL;
+    }
+
+    if( ( newpair->value = strdup( value ) ) == NULL ) {
+      return NULL;
+    }
+
+    newpair->next = NULL;
+
+    return newpair;
+  }
+#+END_SRC
+
+*** Inserting the key-value pair
+#+BEGIN_SRC c :tangle hash.h
+  /* Insert a key-value pair into a hash table. */
+  // hashtable_t *hashtable, char *key, char *value
+  void *ht_set_fn(void *arg) {
+    ht_arg_t *set_args = (ht_arg_t*) arg;
+    hashtable_t *hashtable = set_args->hashtable;
+    char *key;
+    char *value;
+    int idx = 0;
+    unsigned i = 0;
+    entry_t *newpair = NULL;
+    entry_t *next = NULL;
+    entry_t *last = NULL;
+    pthread_mutex_t* lock;
+
+    while (i < set_args->input_len) {
+      pthread_mutex_lock(&set_args->count_mut);
+      i = set_args->count;
+      set_args->count++;
+      pthread_mutex_unlock(&set_args->count_mut);
+
+      // Check in case another thread incremented the count
+      // before the lock was granted to this thread.
+      if (i >= set_args->input_len) {
+        break;
+      }
+
+      key = set_args->input->keys[i];
+      value = set_args->input->values[i];
+
+      idx = ht_hash( hashtable->size, key );
+      //lock = (pthread_mutex_t*)(&hashtable->locks[idx % hashtable->bins]);
+      //lock = (pthread_mutex_t*)(&hashtable->locks[0]);
+      //lock = (pthread_mutex_t *)(&hashtable->locks[idx % hashtable->bins]);
+      lock = &mutexes[idx % hashtable->bins];
+
+      pthread_mutex_lock(lock);
+      next = hashtable->table[idx];
+
+      while( next != NULL && next->key != NULL && strcmp( key, next->key ) > 0 ) {
+        last = next;
+        next = next->next;
+      }
+
+      /* There's already a pair.  Let's replace that string. */
+      if( next != NULL && next->key != NULL && strcmp( key, next->key ) == 0 ) {
+
+        free( next->value );
+        next->value = strdup( value );
+
+      /* Nope, could't find it.  Time to grow a pair. */
+      } else {
+        newpair = ht_newpair( key, value );
+
+        /* We're at the start of the linked list in this index. */
+        if( next == hashtable->table[ idx ] ) {
+          newpair->next = next;
+          hashtable->table[ idx ] = newpair;
+
+        /* We're at the end of the linked list in this index. */
+        } else if ( next == NULL ) {
+          last->next = newpair;
+
+        /* We're in the middle of the list. */
+        } else  {
+          newpair->next = next;
+          last->next = newpair;
+        }
+      }
+
+      set_args->cb(set_args, i, set_args->input->values[i]);
+      pthread_mutex_unlock(lock);
+    }
+
+    pthread_barrier_wait(&set_args->barrier);
+
+    pthread_exit((void*) 0);
+  }
+
+  void ht_set(ht_arg_t *args) {
+    pthread_t threads[args->threads];
+
+    for (unsigned i = 0; i < args->threads; i++) {
+      printf("Starting thread: %d\n", i);
+      pthread_create(&threads[i], NULL, *ht_set_fn, (void *)(args));
+    }
+  }
+#+END_SRC
+
+** Retrieval
+#+BEGIN_SRC c :tangle hash.h
+  /* Retrieve a key-value pair from a hash table. */
+  void *ht_get_fn( void* arg ) {
+    ht_arg_t *get_args = (ht_arg_t*) arg;
+    hashtable_t *hashtable = get_args->hashtable;
+    char *key;
+    char *value;
+    unsigned int idx = 0;
+    unsigned i = 0;
+    entry_t *pair;
+    pthread_mutex_t* lock;
+
+    printf("count: %d\n", get_args->count);
+
+    while(i < get_args->output_len) {
+      pthread_mutex_lock(&get_args->count_mut);
+      i = get_args->count;
+      get_args->count++;
+      pthread_mutex_unlock(&get_args->count_mut);
+
+      if (i >= get_args->input_len) {
+        break;
+      }
+
+      key = get_args->input->keys[i];
+      value = get_args->input->values[i];
+
+      idx = ht_hash( hashtable->size, key );
+
+      lock = &mutexes[idx % hashtable->bins];
+
+      pthread_mutex_lock(lock);
+
+      /* Step through the bin, looking for our value. */
+      pair = hashtable->table[ idx ];
+      while( pair != NULL && pair->key != NULL && strcmp( key, pair->key ) > 0 ) {
+        pair = pair->next;
+      }
+      pthread_mutex_unlock(lock);
+
+      printf("%s\n", pair->value);
+      /* Did we actually find anything? */
+      if( pair == NULL || pair->key == NULL || strcmp( key, pair->key ) != 0 ) {
+        get_args->cb(get_args, i, NULL);
+      } else {
+        get_args->cb(get_args, i, pair->value);
+      }
+
+      //pthread_mutex_unlock(lock);
+    }
+
+    pthread_barrier_wait(&get_args->barrier);
+
+    pthread_exit((void*) 0);
+  }
+
+  /*
+   ,* TODO: Merge this with ht_set if the two don't differ.
+   ,*/
+  void ht_get(ht_arg_t *args) {
+    pthread_t threads[args->threads];
+
+    for (unsigned i = 0; i < args->threads; i++) {
+      printf("Starting get thread: %d\n", i);
+      pthread_create(&threads[i], NULL, *ht_get_fn, (void *)(args));
+    }
+  }
+#+END_SRC
+
+** Simple return function
+To return a single value for testing the hash table, a callback function was
+written that stores the value in the argument variable.
+#+BEGIN_SRC c :tangle hash.h
+  void store_value(void* arg, int idx, void* value) {
+    ht_arg_t* args = (ht_arg_t*) arg;
+
+    if (value == NULL) {
+      args->output->values[idx] = "not found";
+    } else {
+      printf("Setting value %s at %d\n", (char *) value, idx);
+      args->output->values[idx] = strdup((char*) value);
+    }
+  }
+#+END_SRC
+
+** Increment function
+#+BEGIN_SRC c :tangle hash.h
+  void inc_count(void* arg, int idx, void* value) {
+    ht_arg_t* args = (ht_arg_t*) arg;
+    printf("Count is now: %d\n", idx);
+  }
+#+END_SRC
+* 15-puzzle
+** Setup
+The hash table functions are imported to allow for caching board states.
+#+BEGIN_SRC c :tangle puzzle.h
+  #include <stdint.h>
+
+  typedef struct {
+    uint8_t board[4][4];
+    uint8_t pos[2];
+    hashtable_t *table;
+  } puzzle_t;
+
+  #define INIT_BOARD {{ 1,  2,  3,  4}, \
+                      { 5,  6,  7,  8}, \
+                      { 9, 10, 11, 12}, \
+                      {13, 14, 15, 16}}
+#+END_SRC
+
+** Board utilities
+#+BEGIN_SRC c :tangle puzzle.h
+  void shuffle_board(puzzle_t *puzzle) {
+    uint8_t temp;
+
+    for (unsigned i; i < 256; i++) {
+      uint8_t k = rand() % 4;
+      uint8_t l = rand() % 4;
+      uint8_t m = rand() % 4;
+      uint8_t n = rand() % 4;
+      //printf("k: %u, l: %u, m: %u, n: %u\n", k, l, m, n);
+
+      temp = puzzle->board[k][l];
+      puzzle->board[k][l] = puzzle->board[m][n];
+      puzzle->board[m][n] = temp;
+    }
+
+    // Do this in a separate array since the check
+    // may actually be done less times than the
+    // number of shuffle swaps.
+    for (uint8_t i; i < 4; i++) {
+      for (uint8_t j; j < 4; j++) {
+        if (puzzle->board[i][j] == 16) {
+          puzzle->pos[0] = i;
+          puzzle->pos[1] = j;
+        }
+      }
+    }
+  }
+
+  uint8_t[4][4] clone_board(uint8_t board) {
+    uint8_t new_board[4][4];
+
+    for (uint8_t i = 0; i < 4; i++) {
+      for (uint8_t j = 0; j < 4; j++) {
+        new_board[i][j] = board[i][j];
+      }
+    }
+
+    return new_board;
+  }
+
+  void print_board(uint8_t board[4][4]) {
+    for (uint8_t i = 0; i < 4; i++) {
+      for (uint8_t j = 0; j < 4; j++) {
+        printf("%u\t", board[i][j]);
+      }
+      printf("\n");
+    }
+  }
+#+END_SRC
+
+** Make moves
+#+BEGIN_SRC c :tangle puzzle.h
+  void puzzle_step(puzzle_t *puzzle) {
+    uint8_t temp;
+    uint8_t x = puzzle->pos[0];
+    uint8_t y = puzzle->pos[1];
+
+    if (x > 0) {
+      uint8_t board_l[4][4] = clone_board(puzzle->board);
+
+      temp = board_l[x][y];
+      board_l[x][y] = board_l[x - 1][y];
+      board_l[x - 1][y] = temp;
+
+      // process
+    }
+  }
+#+END_SRC
+* Testing program
+The first portion of the =assignment2.c= code involves importing the necessary
+headers and creating the appropriate utility functions.
+
+#+BEGIN_SRC c :tangle assignment2.c
+  /*
+   * assignment2.c
+   * Author: Evan Bradley
+   */
+
+  #include <stdio.h>
+  #include <math.h>
+  #include <sys/timeb.h>
+  #include "barriers.h"
+  #include "hash.h"
+  #include "puzzle.h"
+#+END_SRC
+
+A timing function from the course Moodle page is used for timing.
+#+BEGIN_SRC c :tangle assignment2.c
+  void handler(int sig) {
+    void *array[10];
+    size_t size;
+
+    // get void*'s for all entries on the stack
+    size = backtrace(array, 10);
+
+    // print out all the frames to stderr
+    fprintf(stderr, "Error: signal %d:\n", sig);
+    backtrace_symbols_fd(array, size, 2);
+    exit(1);
+  }
+
+  /*
+   ,* The following function is taken from matvec.c on the Moodle coursepage.
+   ,*/
+  double read_timer() {
+      struct timeb tm;
+      ftime(&tm);
+      return (double) tm.time + (double) tm.millitm / 1000.0;
+  }
+
+  int main(int argc, char **argv) {
+    //signal(SIGSEGV, handler);
+
+    pthread_t threads[4];
+    unsigned thread_count = 2;
+    hashtable_t *hashtable = ht_create(20, 16); //65536
+    unsigned count = 0;
+    char* values[] = { "lmao", "kek" };
+    kv_t* kv_arr;
+    unsigned num_values = 4;
+    unsigned v = 0;
+    ht_arg_t *args;
+
+    kv_arr = malloc(sizeof(kv_t));
+    init_kv(kv_arr, 4, num_values);
+
+    for (unsigned i = 0; i < num_values; i++) {
+      printf("%s: %s\n", kv_arr->keys[i], kv_arr->values[i]);
+    }
+
+    for (unsigned i = 0; i < MUTEX_COUNT; i++ ) {
+      pthread_mutex_init(&mutexes[i], NULL);
+    }
+
+    args = malloc(sizeof(ht_arg_t));
+
+    args->hashtable = hashtable;
+    args->input = kv_arr;
+    args->cb = &inc_count;
+    args->count = 0;
+    args->threads = 2;
+    args->input_len = num_values;
+    pthread_mutex_init(&args->count_mut, NULL);
+    pthread_barrier_init(&args->barrier, NULL, 3);
+
+    ht_set(args);
+
+    printf("Waiting on threads\n");
+    pthread_barrier_wait(&args->barrier);
+
+    printf("Passed barrier\n");
+
+    args->count = 0;
+
+    args->output = malloc(sizeof(kv_t));
+    if((args->output->keys = malloc(sizeof(char*) * num_values)) == NULL) {
+      return 1;
+    }
+
+    if((args->output->values = malloc(sizeof(char*) * num_values)) == NULL) {
+      return 1;
+    }
+
+    args->output_len = num_values;
+    args->cb = &store_value;
+    pthread_barrier_init(&args->barrier, NULL, 3);
+
+    ht_get(args);
+    pthread_barrier_wait(&args->barrier);
+    printf("Passed second barrier.\n");
+
+    for (unsigned i = 0; i < num_values; i++) {
+      printf("%s: %s\n", args->output->keys[i], args->output->values[i]);
+    }
+
+    puzzle_t puzzle = {INIT_BOARD, {3, 3}, hashtable};
+
+    shuffle_board(&puzzle);
+
+    print_board(puzzle.board);
+
+    /*for (unsigned t = 0; t < thread_count; t++) {
+      ht_arg_t args;
+      args.hashtable = hashtable;
+      args.key = "ayy";
+      args.value = values[v];
+      args.cb = &inc_count;
+      args.count = &count;
+      pthread_create(&threads[t], NULL, *ht_set, (void*)(&args));
+      printf("created thread %u\n", t);
+      printf("v: %u\n", v);
+    }*/
+
+    //while (count != 2);
+
+    /*for (unsigned i = 0; i < num_values; i++) {
+    }*/
+
+    //printf("Count: %d\n", args->count);
+
+    //printf("%d\n", hashtable->bins);
+
+    return 0;
+  }
+#+END_SRC
