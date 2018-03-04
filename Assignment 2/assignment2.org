@@ -82,11 +82,11 @@ hash table implementations. The basis for this code is used in =hash.h=, which
 adapts the code to be multithreaded using pthreads.
 
 ** Setup
-The =entry= struct consists of a key-value pair and a pointer to another entry,
+The =node= struct consists of a key-value pair and a pointer to another node,
 constituting a linked list in the case of a collision. A hash table is defined
 as a struct containing a size and a pointer to an array. Both of these are given
 their own types for easier use.
-#+BEGIN_SRC c :tangle hash.h
+#+BEGIN_SRC c :tangle assignment2.h
   #include <stdlib.h>
   #include <limits.h>
   #include <string.h>
@@ -95,22 +95,23 @@ their own types for easier use.
   #include <execinfo.h>
   #include <signal.h>
   #include <stdlib.h>
+  #include <stdint.h>
 
   #define MUTEX_COUNT 16
 
-  struct entry_s {
-    char *key;
-    char *value;
-    struct entry_s *next;
+  struct node_s {
+    uint8_t key[4][4];
+    unsigned value;
+    struct node_s *next;
   };
 
-  typedef struct entry_s entry_t;
+  typedef struct node_s node_t;
 
   struct hashtable_s {
     unsigned int size;
     unsigned int bins;
     pthread_mutex_t **locks;
-    entry_t **table;
+    node_t **table;
   };
 
   typedef struct hashtable_s hashtable_t;
@@ -144,6 +145,7 @@ their own types for easier use.
 
   pthread_mutex_t mutexes[MUTEX_COUNT];
 
+  #include "heap.h"
 #+END_SRC
 
 ** Key-value pairs creation
@@ -182,7 +184,7 @@ table.
 #+END_SRC
 ** Hash table creation
 Hash table creation involves allocating heap space for the hash table struct and
-each entry in the array.
+each node in the array.
 #+BEGIN_SRC c :tangle hash.h
   /* Create a new hashtable. */
   hashtable_t *ht_create( unsigned int size, unsigned int bins ) {
@@ -198,7 +200,7 @@ each entry in the array.
     }
 
     /* Allocate pointers to the head nodes. */
-    if( ( hashtable->table = malloc( sizeof( entry_t * ) * size ) ) == NULL ) {
+    if( ( hashtable->table = malloc( sizeof( node_t * ) * size ) ) == NULL ) {
       return NULL;
     }
 
@@ -225,7 +227,7 @@ each entry in the array.
 ** Insertion
 Inserting a new value into the hash table involves hashing the given string into
 an array index, then creating a new key-value pair struct for insertion into the
-table. In the case of a collision, the entry is inserted
+table. In the case of a collision, the node is inserted
 *** Hash function
 The hash function used is a critical component of the hash table: ensuring a
 good distribution of values will keep worst-case access times low by minimizing
@@ -264,189 +266,95 @@ mod the size of the hash table.
   }
 #+END_SRC
 
-*** Creating a new key-value pair
-Creating the pair is simple: the string values for each are copied into the
-struct to be inserted into the hash table.
-#+BEGIN_SRC c :tangle hash.h
-  /* Create a key-value pair. */
-  entry_t *ht_newpair( char *key, char *value ) {
-    entry_t *newpair;
-
-    if( ( newpair = malloc( sizeof( entry_t ) ) ) == NULL ) {
-      return NULL;
-    }
-
-    if( ( newpair->key = strdup( key ) ) == NULL ) {
-      return NULL;
-    }
-
-    if( ( newpair->value = strdup( value ) ) == NULL ) {
-      return NULL;
-    }
-
-    newpair->next = NULL;
-
-    return newpair;
-  }
-#+END_SRC
-
 *** Inserting the key-value pair
 #+BEGIN_SRC c :tangle hash.h
   /* Insert a key-value pair into a hash table. */
   // hashtable_t *hashtable, char *key, char *value
-  void *ht_set_fn(void *arg) {
-    ht_arg_t *set_args = (ht_arg_t*) arg;
-    hashtable_t *hashtable = set_args->hashtable;
-    char *key;
-    char *value;
+  void ht_set_mut(hashtable_t *hashtable, uint8_t key[4][4], unsigned value) {
     int idx = 0;
-    unsigned i = 0;
-    entry_t *newpair = NULL;
-    entry_t *next = NULL;
-    entry_t *last = NULL;
-    pthread_mutex_t* lock;
+    node_t *newpair = NULL;
+    node_t *next = NULL;
+    node_t *last = NULL;
+    pthread_mutex_t *lock;
 
-    while (i < set_args->input_len) {
-      pthread_mutex_lock(&set_args->count_mut);
-      i = set_args->count;
-      set_args->count++;
-      pthread_mutex_unlock(&set_args->count_mut);
+    idx = hash_board( hashtable->size, key );
+    lock = &mutexes[idx % hashtable->bins];
 
-      // Check in case another thread incremented the count
-      // before the lock was granted to this thread.
-      if (i >= set_args->input_len) {
-        break;
-      }
+    pthread_mutex_lock(lock);
+    next = hashtable->table[idx];
 
-      key = set_args->input->keys[i];
-      value = set_args->input->values[i];
-
-      idx = ht_hash( hashtable->size, key );
-      //lock = (pthread_mutex_t*)(&hashtable->locks[idx % hashtable->bins]);
-      //lock = (pthread_mutex_t*)(&hashtable->locks[0]);
-      //lock = (pthread_mutex_t *)(&hashtable->locks[idx % hashtable->bins]);
-      lock = &mutexes[idx % hashtable->bins];
-
-      pthread_mutex_lock(lock);
-      next = hashtable->table[idx];
-
-      while( next != NULL && next->key != NULL && strcmp( key, next->key ) > 0 ) {
-        last = next;
-        next = next->next;
-      }
-
-      /* There's already a pair.  Let's replace that string. */
-      if( next != NULL && next->key != NULL && strcmp( key, next->key ) == 0 ) {
-
-        free( next->value );
-        next->value = strdup( value );
-
-      /* Nope, could't find it.  Time to grow a pair. */
-      } else {
-        newpair = ht_newpair( key, value );
-
-        /* We're at the start of the linked list in this index. */
-        if( next == hashtable->table[ idx ] ) {
-          newpair->next = next;
-          hashtable->table[ idx ] = newpair;
-
-        /* We're at the end of the linked list in this index. */
-        } else if ( next == NULL ) {
-          last->next = newpair;
-
-        /* We're in the middle of the list. */
-        } else  {
-          newpair->next = next;
-          last->next = newpair;
-        }
-      }
-
-      set_args->cb(set_args, i, set_args->input->values[i]);
-      pthread_mutex_unlock(lock);
+    while( next != NULL && brdcmp( key, next->key ) > 0 ) {
+      last = next;
+      next = next->next;
     }
 
-    pthread_barrier_wait(&set_args->barrier);
+    /* There's already a pair.  Let's replace that string. */
+    if( next != NULL && brdcmp( key, next->key ) == 0 ) {
+      next->value = value;
+    } else { /* Nope, could't find it.  Time to grow a pair. */
+      printf("allocating newpair\n");
+      newpair = malloc(sizeof(node_t));
 
-    pthread_exit((void*) 0);
-  }
+      printf("newpair allocated\n");
 
-  void ht_set(ht_arg_t *args) {
-    pthread_t threads[args->threads];
+      clone_board(newpair->key, key);
 
-    for (unsigned i = 0; i < args->threads; i++) {
-      printf("Starting thread: %d\n", i);
-      pthread_create(&threads[i], NULL, *ht_set_fn, (void *)(args));
+      newpair->value = value;
+
+      newpair->next = NULL;
+
+      printf("329\n");
+      /* We're at the start of the linked list in this index. */
+      if( next == hashtable->table[ idx ] ) {
+        newpair->next = next;
+        hashtable->table[ idx ] = newpair;
+
+      /* We're at the end of the linked list in this index. */
+      } else if ( next == NULL ) {
+        last->next = newpair;
+
+      /* We're in the middle of the list. */
+      } else  {
+        newpair->next = next;
+        last->next = newpair;
+      }
     }
+
+    pthread_mutex_unlock(lock);
   }
 #+END_SRC
 
 ** Retrieval
 #+BEGIN_SRC c :tangle hash.h
   /* Retrieve a key-value pair from a hash table. */
-  void *ht_get_fn( void* arg ) {
-    ht_arg_t *get_args = (ht_arg_t*) arg;
-    hashtable_t *hashtable = get_args->hashtable;
-    char *key;
-    char *value;
+  int ht_get_mut(hashtable_t *hashtable, uint8_t key[4][4]) {
     unsigned int idx = 0;
     unsigned i = 0;
-    entry_t *pair;
+    node_t *pair;
     pthread_mutex_t* lock;
 
-    printf("count: %d\n", get_args->count);
+    idx = hash_board( hashtable->size, key );
 
-    while(i < get_args->output_len) {
-      pthread_mutex_lock(&get_args->count_mut);
-      i = get_args->count;
-      get_args->count++;
-      pthread_mutex_unlock(&get_args->count_mut);
+    lock = &mutexes[idx % hashtable->bins];
 
-      if (i >= get_args->input_len) {
-        break;
-      }
+    pthread_mutex_lock(lock);
 
-      key = get_args->input->keys[i];
-      value = get_args->input->values[i];
+    /* Step through the bin, looking for our value. */
+    pair = hashtable->table[ idx ];
+    while( pair != NULL && brdcmp( key, pair->key ) > 0 ) {
+      pair = pair->next;
+    }
+    pthread_mutex_unlock(lock);
 
-      idx = ht_hash( hashtable->size, key );
+    /* Did we actually find anything? */
+    if( pair == NULL || brdcmp( key, pair->key ) != 0 ) {
 
-      lock = &mutexes[idx % hashtable->bins];
-
-      pthread_mutex_lock(lock);
-
-      /* Step through the bin, looking for our value. */
-      pair = hashtable->table[ idx ];
-      while( pair != NULL && pair->key != NULL && strcmp( key, pair->key ) > 0 ) {
-        pair = pair->next;
-      }
-      pthread_mutex_unlock(lock);
-
-      printf("%s\n", pair->value);
-      /* Did we actually find anything? */
-      if( pair == NULL || pair->key == NULL || strcmp( key, pair->key ) != 0 ) {
-        get_args->cb(get_args, i, NULL);
-      } else {
-        get_args->cb(get_args, i, pair->value);
-      }
-
-      //pthread_mutex_unlock(lock);
+      return -1;
+    } else {
+      return pair->value;
     }
 
-    pthread_barrier_wait(&get_args->barrier);
-
-    pthread_exit((void*) 0);
-  }
-
-  /*
-   ,* TODO: Merge this with ht_set if the two don't differ.
-   ,*/
-  void ht_get(ht_arg_t *args) {
-    pthread_t threads[args->threads];
-
-    for (unsigned i = 0; i < args->threads; i++) {
-      printf("Starting get thread: %d\n", i);
-      pthread_create(&threads[i], NULL, *ht_get_fn, (void *)(args));
-    }
+    //pthread_mutex_unlock(lock);
   }
 #+END_SRC
 
@@ -476,19 +384,30 @@ written that stores the value in the argument variable.
 * 15-puzzle
 ** Setup
 The hash table functions are imported to allow for caching board states.
-#+BEGIN_SRC c :tangle puzzle.h
-  #include <stdint.h>
-
+#+BEGIN_SRC c :tangle assignment2.h
   typedef struct {
     uint8_t board[4][4];
     uint8_t pos[2];
     hashtable_t *table;
+    node_t *queue;
+    pthread_mutex_t qmut;
+    unsigned qlen;
   } puzzle_t;
+
+  typedef struct {
+    puzzle_t *puzzle;
+    uint8_t solved;
+    pthread_barrier_t barrier;
+  } puzzle_arg_t;
 
   #define INIT_BOARD {{ 1,  2,  3,  4}, \
                       { 5,  6,  7,  8}, \
                       { 9, 10, 11, 12}, \
                       {13, 14, 15, 16}}
+
+  void shuffle_board(puzzle_t *puzzle);
+  void clone_board(uint8_t new_board[4][4], uint8_t board[4][4]);
+  int brdcmp(uint8_t board1[4][4], uint8_t board2[4][4]);
 #+END_SRC
 
 ** Board utilities
@@ -511,8 +430,8 @@ The hash table functions are imported to allow for caching board states.
     // Do this in a separate array since the check
     // may actually be done less times than the
     // number of shuffle swaps.
-    for (uint8_t i; i < 4; i++) {
-      for (uint8_t j; j < 4; j++) {
+    for (uint8_t i = 0; i < 4; i++) {
+      for (uint8_t j = 0; j < 4; j++) {
         if (puzzle->board[i][j] == 16) {
           puzzle->pos[0] = i;
           puzzle->pos[1] = j;
@@ -521,16 +440,12 @@ The hash table functions are imported to allow for caching board states.
     }
   }
 
-  uint8_t[4][4] clone_board(uint8_t board) {
-    uint8_t new_board[4][4];
-
+  void clone_board(uint8_t new_board[4][4], uint8_t board[4][4]) {
     for (uint8_t i = 0; i < 4; i++) {
       for (uint8_t j = 0; j < 4; j++) {
         new_board[i][j] = board[i][j];
       }
     }
-
-    return new_board;
   }
 
   void print_board(uint8_t board[4][4]) {
@@ -541,24 +456,226 @@ The hash table functions are imported to allow for caching board states.
       printf("\n");
     }
   }
+
+  int brdcmp(uint8_t board1[4][4], uint8_t board2[4][4]) {
+    int8_t diff;
+
+    printf("comparing boards\n");
+    for (uint8_t i = 0; i < 4; i++) {
+      for (uint8_t j = 0; j < 4; j++) {
+        diff = board1[i][j] - board2[i][j];
+        if (diff != 0) {
+          return diff;
+        }
+      }
+    }
+
+    return 0;
+  }
+
+  unsigned man_dist(uint8_t board1[4][4], uint8_t board2[4][4]) {
+    unsigned sum = 0;
+
+    for (uint8_t i = 0; i < 4; i++) {
+      for (uint8_t j = 0; j < 4; j++) {
+        sum += abs(board1[i][j] - board2[i][j]);
+      }
+    }
+
+    return sum;
+  }
+
+  unsigned man_error(uint8_t board[4][4]) {
+    uint8_t solved_board[4][4] = INIT_BOARD;
+
+    return man_dist(board, solved_board);
+  }
 #+END_SRC
 
 ** Make moves
 #+BEGIN_SRC c :tangle puzzle.h
-  void puzzle_step(puzzle_t *puzzle) {
+  void puzzle_step(puzzle_t *puzzle, uint8_t *solved) {
+    uint8_t board_tmp[4][4];
     uint8_t temp;
+    node_t queue_item;
     uint8_t x = puzzle->pos[0];
     uint8_t y = puzzle->pos[1];
 
     if (x > 0) {
-      uint8_t board_l[4][4] = clone_board(puzzle->board);
+      printf("x > 0\n");
+      clone_board(board_tmp, puzzle->board);
 
-      temp = board_l[x][y];
-      board_l[x][y] = board_l[x - 1][y];
-      board_l[x - 1][y] = temp;
+      temp = board_tmp[x][y];
+      board_tmp[x][y] = board_tmp[x - 1][y];
+      board_tmp[x - 1][y] = temp;
+
+      if (ht_get_mut(puzzle->table, board_tmp) == -1) {
+        unsigned error = man_error(board_tmp);
+        printf("error: %u\n", error);
+
+        if (error == 0) {
+          print_board(board_tmp);
+          *solved = 1;
+        }
+        printf("error isn't zero\n");
+
+        ht_set_mut(puzzle->table, board_tmp, error);
+        printf("set hash table value\n");
+
+        clone_board(queue_item.key, board_tmp);
+        queue_item.value = error;
+
+        pthread_mutex_lock(&puzzle->qmut);
+        insert(puzzle->queue, &puzzle->qlen, 4, queue_item);
+        pthread_mutex_unlock(&puzzle->qmut);
+      } else {
+        printf("Already in table.\n");
+      }
+    }
+
+    if (x < 3) {
+      printf("x < 3\n");
+      clone_board(board_tmp, puzzle->board);
+
+      temp = board_tmp[x][y];
+      board_tmp[x][y] = board_tmp[x + 1][y];
+      board_tmp[x + 1][y] = temp;
 
       // process
+      if (ht_get_mut(puzzle->table, board_tmp) == -1) {
+        unsigned error = man_error(board_tmp);
+
+        if (error == 0) {
+          print_board(board_tmp);
+          *solved = 1;
+        }
+
+        ht_set_mut(puzzle->table, board_tmp, error);
+
+        clone_board(queue_item.key, board_tmp);
+        queue_item.value = error;
+
+        pthread_mutex_lock(&puzzle->qmut);
+        insert(puzzle->queue, &puzzle->qlen, 4, queue_item);
+        pthread_mutex_unlock(&puzzle->qmut);
+      } else {
+        printf("Already in table.\n");
+      }
+
     }
+
+    if (y > 0) {
+      printf("y > 0\n");
+      clone_board(board_tmp, puzzle->board);
+
+      temp = board_tmp[x][y];
+      board_tmp[x][y] = board_tmp[x][y - 1];
+      board_tmp[x][y - 1] = temp;
+
+      // process
+      if (ht_get_mut(puzzle->table, board_tmp) == -1) {
+        unsigned error = man_error(board_tmp);
+
+        if (error == 0) {
+          print_board(board_tmp);
+          *solved = 1;
+        }
+
+        ht_set_mut(puzzle->table, board_tmp, error);
+
+        clone_board(queue_item.key, board_tmp);
+        queue_item.value = error;
+
+        pthread_mutex_lock(&puzzle->qmut);
+        insert(puzzle->queue, &puzzle->qlen, 4, queue_item);
+        pthread_mutex_unlock(&puzzle->qmut);
+      }  else {
+        printf("Already in table.\n");
+      }
+
+    }
+
+    if (y < 3) {
+      printf("y < 3\n");
+      clone_board(board_tmp, puzzle->board);
+
+      temp = board_tmp[x][y];
+      board_tmp[x][y] = board_tmp[x][y + 1];
+      board_tmp[x][y + 1] = temp;
+
+      // process
+      if (ht_get_mut(puzzle->table, board_tmp) == -1) {
+        unsigned error = man_error(board_tmp);
+
+        if (error == 0) {
+          print_board(board_tmp);
+          *solved = 1;
+        }
+
+        ht_set_mut(puzzle->table, board_tmp, error);
+
+        clone_board(queue_item.key, board_tmp);
+        queue_item.value = error;
+
+        pthread_mutex_lock(&puzzle->qmut);
+        insert(puzzle->queue, &puzzle->qlen, 4, queue_item);
+        pthread_mutex_unlock(&puzzle->qmut);
+      }  else {
+        printf("Already in table.\n");
+      }
+
+    }
+  }
+#+END_SRC
+
+** Solve puzzle
+#+BEGIN_SRC c :tangle puzzle.h
+  void *puzzle_runner(void* arg) {
+    puzzle_arg_t *args = (puzzle_arg_t*) arg;
+    puzzle_t *puzzle = args->puzzle;
+
+    while (args->solved == 0 && puzzle->qlen != 0) {
+      printf("Made it to while loop\n");
+      pthread_mutex_lock(&puzzle->qmut);
+      node_t board = extract_min(puzzle->queue, &puzzle->qlen, 4);
+      pthread_mutex_unlock(&puzzle->qmut);
+      printf("extracted min\n");
+      printf("qlen: %u\n", puzzle->qlen);
+
+      puzzle_step(puzzle, &args->solved);
+    }
+
+    if (puzzle->qlen == 0) {
+      printf("Ran out of queued items.\n");
+    } else if (args->solved == 1) {
+      printf("puzzle solved.\n");
+    } else {
+      printf("something went terribly wrong.\n");
+    }
+
+    pthread_barrier_wait(&args->barrier);
+
+    pthread_exit((void*) 0);
+  }
+
+  void solve_puzzle(puzzle_t *puzzle, uint8_t thread_num) {
+    pthread_t threads[thread_num];
+
+    puzzle_arg_t puzzle_arg = {puzzle, 0};
+
+    pthread_barrier_init(&puzzle_arg.barrier, NULL, thread_num + 1);
+
+    puzzle_step(puzzle, &puzzle_arg.solved);
+    printf("qlen: %u\n", puzzle->qlen);
+
+    for (uint8_t i; i < thread_num; i++) {
+      printf("Starting thread: %u\n", i);
+      pthread_create(&threads[i], NULL, *puzzle_runner, (void *)(&puzzle_arg));
+    }
+
+    pthread_barrier_wait(&puzzle_arg.barrier);
+
+    printf("Puzzle solved.\n");
   }
 #+END_SRC
 * Testing program
@@ -575,6 +692,7 @@ headers and creating the appropriate utility functions.
   #include <math.h>
   #include <sys/timeb.h>
   #include "barriers.h"
+  #include "assignment2.h"
   #include "hash.h"
   #include "puzzle.h"
 #+END_SRC
@@ -605,7 +723,7 @@ A timing function from the course Moodle page is used for timing.
 
   int main(int argc, char **argv) {
     //signal(SIGSEGV, handler);
-
+    /*
     pthread_t threads[4];
     unsigned thread_count = 2;
     hashtable_t *hashtable = ht_create(20, 16); //65536
@@ -617,9 +735,9 @@ A timing function from the course Moodle page is used for timing.
     ht_arg_t *args;
 
     kv_arr = malloc(sizeof(kv_t));
-    init_kv(kv_arr, 4, num_values);
+    init_kv(kv_arr, 4, num_values);*/
 
-    for (unsigned i = 0; i < num_values; i++) {
+    /*for (unsigned i = 0; i < num_values; i++) {
       printf("%s: %s\n", kv_arr->keys[i], kv_arr->values[i]);
     }
 
@@ -666,13 +784,51 @@ A timing function from the course Moodle page is used for timing.
 
     for (unsigned i = 0; i < num_values; i++) {
       printf("%s: %s\n", args->output->keys[i], args->output->values[i]);
-    }
+    }*/
 
+    /*
     puzzle_t puzzle = {INIT_BOARD, {3, 3}, hashtable};
 
     shuffle_board(&puzzle);
 
     print_board(puzzle.board);
+
+    uint8_t board2[4][4];
+
+    clone_board(board2, puzzle.board);
+
+    print_board(board2);
+
+    uint8_t newboard[4][4] = INIT_BOARD;
+
+    unsigned board2_dist = man_dist(board2, newboard);
+    printf("Dist: %u\n", board2_dist);
+
+    ht_set_mut(hashtable, board2, board2_dist);
+    unsigned board2_hash_dist = ht_get_mut(hashtable, board2);
+    printf("%u\n", board2_hash_dist);
+
+    printf("%d\n", ht_get_mut(hashtable, newboard));
+
+    node_t node1;
+    clone_board(node1.key, newboard);
+    node1.value = 34;
+    node_t node2;
+    clone_board(node2.key, board2);
+    node2.value = 77;
+
+    printf("%u\n", node2.value);
+
+    //uint8_t *heap = malloc(sizeof(uint8_t[4][4]) * 10000);
+    node_t arr[20] = {node1, node2};
+    int x = 2;
+
+    buildHeap(arr, x, 4);
+
+    for (int i = 0; i < x; i++)
+      printf("%u\t", arr[i].value);
+
+    printf("\n"); */
 
     /*for (unsigned t = 0; t < thread_count; t++) {
       ht_arg_t args;
@@ -694,6 +850,22 @@ A timing function from the course Moodle page is used for timing.
     //printf("Count: %d\n", args->count);
 
     //printf("%d\n", hashtable->bins);
+
+    hashtable_t *hashtable = ht_create(65536, 16); //65536
+    node_t *heap = malloc(sizeof(node_t) * 10000);
+
+    puzzle_t puzzle = {INIT_BOARD, {0, 0}, hashtable, heap, 0};
+    printf("Initial board: \n");
+    print_board(puzzle.board);
+
+    shuffle_board(&puzzle);
+    printf("Shuffled board: \n");
+    print_board(puzzle.board);
+    printf("Initial error: %u\t initial pos: (%u, %u)\n", man_error(puzzle.board), puzzle.pos[0], puzzle.pos[1]);
+
+    pthread_mutex_init(&puzzle.qmut, NULL);
+
+    solve_puzzle(&puzzle, 2);
 
     return 0;
   }
