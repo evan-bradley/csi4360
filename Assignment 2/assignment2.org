@@ -140,7 +140,8 @@ their own types for easier use.
   struct ht_arg_s {
     hashtable_t *table;
     node_t *kv_pairs;
-    unsigned len;
+    unsigned start;
+    unsigned end;
     pthread_barrier_t *barrier;
   };
 
@@ -382,7 +383,7 @@ mod the size of the hash table.
   void *insert_into_ht_mut(void *arg) {
     ht_arg_t *args = (ht_arg_t *) arg;
 
-    for (unsigned i = 0; i < args->len; i++) {
+    for (unsigned i = args->start; i < args->end; i++) {
       ht_set_mut(args->table, args->kv_pairs[i].key, args->kv_pairs[i].value);
     }
 
@@ -394,14 +395,19 @@ mod the size of the hash table.
   void run_insertions_mut(node_t *kv_pairs, hashtable_t *table, unsigned len, unsigned thread_num) {
     pthread_t threads[thread_num];
     pthread_barrier_t barrier;
+    ht_arg_t arg[thread_num];
 
     pthread_barrier_init(&barrier, NULL, thread_num + 1);
 
     for (unsigned i = 0; i < thread_num; i++) {
       unsigned start = i * len / thread_num;
-      //unsigned end = (i + 1) * len / thread_num;
-      ht_arg_t insertion_arg = {table, &kv_pairs[start], len / thread_num, &barrier};
-      pthread_create(&threads[i], NULL, *insert_into_ht_mut, (void *)(&insertion_arg));
+      unsigned end = (i + 1) * len / thread_num;
+      arg[i].table = table;
+      arg[i].kv_pairs = kv_pairs;
+      arg[i].start = start;
+      arg[i].end = end;
+      arg[i].barrier = &barrier;
+      pthread_create(&threads[i], NULL, *insert_into_ht_mut, (void *)(&arg[i]));
       //printf("Created thread %u\n", i);
     }
 
@@ -415,7 +421,7 @@ mod the size of the hash table.
   void *retrieve_from_ht_mut(void *arg) {
     ht_arg_t *args = (ht_arg_t *) arg;
 
-    for (unsigned i = 0; i < args->len; i++) {
+    for (unsigned i = args->start; i < args->end; i++) {
       if (args->kv_pairs[i].value != ht_get_mut(args->table, args->kv_pairs[i].key)) {
         printf("nonequal\n");
       }
@@ -429,14 +435,19 @@ mod the size of the hash table.
   void run_retrievals_mut(node_t *kv_pairs, hashtable_t *table, unsigned len, unsigned thread_num) {
     pthread_t threads[thread_num];
     pthread_barrier_t barrier;
+    ht_arg_t arg[thread_num];
 
     pthread_barrier_init(&barrier, NULL, thread_num + 1);
 
     for (unsigned i = 0; i < thread_num; i++) {
       unsigned start = i * len / thread_num;
-      //unsigned end = (i + 1) * len / thread_num;
-      ht_arg_t retrieval_arg = {table, &kv_pairs[start], len / thread_num, &barrier};
-      pthread_create(&threads[i], NULL, *retrieve_from_ht_mut, (void *)(&retrieval_arg));
+      unsigned end = (i + 1) * len / thread_num;
+      arg[i].table = table;
+      arg[i].kv_pairs = kv_pairs;
+      arg[i].start = start;
+      arg[i].end = end;
+      arg[i].barrier = &barrier;
+      pthread_create(&threads[i], NULL, *retrieve_from_ht_mut, (void *)(&arg[i]));
       //printf("Created thread %u\n", i);
     }
 
@@ -545,8 +556,9 @@ table. In the case of a collision, the node is inserted
     ht_arg_t *args = (ht_arg_t *) arg;
     printf("Inserting\n");
 
-    for (unsigned i = 0; i < args->len; i++) {
-      //printf("i: %u\n", i);
+    printf("kv_pairs: %p\n", args->kv_pairs);
+    for (unsigned i = args->start; i < args->end; i++) {
+      printf("i: %u\n", i);
       ht_set_rw(args->table, args->kv_pairs[i].key, args->kv_pairs[i].value);
     }
 
@@ -559,14 +571,20 @@ table. In the case of a collision, the node is inserted
   void run_insertions_rw(node_t *kv_pairs, hashtable_t *table, unsigned len, unsigned thread_num) {
     pthread_t threads[thread_num];
     pthread_barrier_t barrier;
+    ht_arg_t arg[thread_num];
 
     pthread_barrier_init(&barrier, NULL, thread_num + 1);
 
     for (unsigned i = 0; i < thread_num; i++) {
       unsigned start = floor(i * len / thread_num);
-      //unsigned end = (i + 1) * len / thread_num;
-      ht_arg_t insertion_arg = {table, &kv_pairs[start], floor(len / thread_num), &barrier};
-      pthread_create(&threads[i], NULL, *insert_into_ht_rw, (void *)(&insertion_arg));
+      unsigned end = (i + 1) * len / thread_num;
+      printf("start: %u, end: %u\n", start, end);
+      arg[i].table = table;
+      arg[i].kv_pairs = kv_pairs;
+      arg[i].start = start;
+      arg[i].end = end;
+      arg[i].barrier = &barrier;
+      pthread_create(&threads[i], NULL, *insert_into_ht_rw, (void *)(&arg[i]));
       printf("Created thread %u\n", i);
     }
 
@@ -580,7 +598,7 @@ table. In the case of a collision, the node is inserted
   void *retrieve_from_ht_rw(void *arg) {
     ht_arg_t *args = (ht_arg_t *) arg;
 
-    for (unsigned i = 0; i < args->len; i++) {
+    for (unsigned i = args->start; i < args->end; i++) {
       if (args->kv_pairs[i].value != ht_get_rw(args->table, args->kv_pairs[i].key)) {
         printf("nonequal\n");
       }
@@ -594,14 +612,19 @@ table. In the case of a collision, the node is inserted
   void run_retrievals_rw(node_t *kv_pairs, hashtable_t *table, unsigned len, unsigned thread_num) {
     pthread_t threads[thread_num];
     pthread_barrier_t barrier;
+    ht_arg_t arg[thread_num];
 
     pthread_barrier_init(&barrier, NULL, thread_num + 1);
 
     for (unsigned i = 0; i < thread_num; i++) {
       unsigned start = floor(i * len / thread_num);
-      //unsigned end = (i + 1) * len / thread_num;
-      ht_arg_t retrieval_arg = {table, &kv_pairs[start], floor(len / thread_num), &barrier};
-      pthread_create(&threads[i], NULL, *retrieve_from_ht_rw, (void *)(&retrieval_arg));
+      unsigned end = (i + 1) * len / thread_num;
+      arg[i].table = table;
+      arg[i].kv_pairs = kv_pairs;
+      arg[i].start = start;
+      arg[i].end = end;
+      arg[i].barrier = &barrier;
+      pthread_create(&threads[i], NULL, *retrieve_from_ht_rw, (void *)(&arg[i]));
       printf("Created thread %u\n", i);
     }
 
@@ -650,7 +673,6 @@ impossible state.
     uint8_t x = 3;
     uint8_t y = 3;
 
-    srand(time(0));
     for (unsigned i = 0; i < swaps; i++) {
       uint8_t dir = rand() % 4;
 
@@ -951,22 +973,29 @@ A function from the course Moodle page is used for timing.
   }
 
   int main(int argc, char **argv) {
+    srand(time(NULL));
 
-    double time_puzzle, time_ht_mut_ins, time_ht_mut_ret, time_board_gen;
+    double time_puzzle, time_ht_mut_ins, time_ht_mut_ret,
+    time_ht_rw_ins, time_ht_rw_ret,
+    time_board_gen;
 
     const unsigned MAX_THREADS = 4;
     const unsigned MUTEX_COUNTS = 4;
-    const unsigned NUM_BOARDS = 50000;
+    const unsigned RWLOCK_COUNTS = 4;
+    const unsigned NUM_BOARDS = 100000;
     const unsigned ht_len = 1000000;
     const unsigned thread_count[MAX_THREADS] = {1, 2, 4, 8};
     const unsigned mutex_count[MUTEX_COUNTS] = {10, 25, 50, 100};
+    const unsigned rwlock_count[RWLOCK_COUNTS] = {10, 25, 50, 100};
 
     //hashtable_t *hashtable = ht_create(ht_len, MAX_MUTEXES / 10); //65536
 
     node_t *board_arr = malloc(sizeof(node_t) * NUM_BOARDS);
+    uint8_t init_board[4][4] = INIT_BOARD;
 
     time_board_gen = read_timer();
     for (unsigned i = 0; i < NUM_BOARDS; i++) {
+      clone_board(board_arr[i].key, init_board);
       shuffle_board(&board_arr[i], pow(2, 8));
       board_arr[i].value = man_error(board_arr[i].key);
     }
@@ -979,7 +1008,7 @@ A function from the course Moodle page is used for timing.
     printf("finish\n");
     ht_destroy(hashtable, ht_len);*/
 
-    /*printf("Threads\tIns Time\tRet Time\n");
+    printf("Threads\tIns Time\tRet Time\n");
     for (unsigned i = 0; i < MAX_THREADS; i++) {
       hashtable_t *hashtable = ht_create(ht_len, (i + 1) * MAX_MUTEXES / 10); //65536
 
@@ -1010,7 +1039,40 @@ A function from the course Moodle page is used for timing.
       printf("%u\t%.0f ms\t\t%.0f ms\n", mutex_count[i], time_ht_mut_ins * 1.0e3, time_ht_mut_ret * 1.0e3);
 
       ht_destroy(hashtable, ht_len);
-    }*/
+    }
+
+    printf("Threads\tIns Time\tRet Time\n");
+    for (unsigned i = 0; i < MAX_THREADS; i++) {
+      hashtable_t *hashtable = ht_create(ht_len, (i + 1) * MAX_MUTEXES / 10); //65536
+
+      time_ht_rw_ins = read_timer();
+      run_insertions_rw(board_arr, hashtable, NUM_BOARDS, thread_count[i]);
+      time_ht_rw_ins = (read_timer() - time_ht_rw_ins);
+
+      time_ht_rw_ret = read_timer();
+      run_retrievals_rw(board_arr, hashtable, NUM_BOARDS, thread_count[i]);
+      time_ht_rw_ret = (read_timer() - time_ht_rw_ret);
+
+      printf("%u\t%.0f ms\t\t%.0f ms\n", thread_count[i], time_ht_rw_ins * 1.0e3, time_ht_rw_ret * 1.0e3);
+      ht_destroy(hashtable, ht_len);
+    }
+
+    printf("Rwlocks\tTime\n");
+    for (unsigned i = 0; i < RWLOCK_COUNTS; i++) {
+      hashtable_t *hashtable = ht_create(ht_len, rwlock_count[i]); //65536
+
+      time_ht_rw_ins = read_timer();
+      run_insertions_rw(board_arr, hashtable, NUM_BOARDS, 4);
+      time_ht_rw_ins = (read_timer() - time_ht_rw_ins);
+
+      time_ht_rw_ret = read_timer();
+      run_retrievals_rw(board_arr, hashtable, NUM_BOARDS, 4);
+      time_ht_rw_ret = (read_timer() - time_ht_rw_ret);
+
+      printf("%u\t%.0f ms\t\t%.0f ms\n", rwlock_count[i], time_ht_rw_ins * 1.0e3, time_ht_rw_ret * 1.0e3);
+
+      ht_destroy(hashtable, ht_len);
+    }
 
 
     //printf("Time:\t%.0f ms\n", time_ht_mut * 1.0e3);
@@ -1058,7 +1120,7 @@ A function from the course Moodle page is used for timing.
 
     printf("Time:\t%.0f ms\n", time_puzzle * 1.0e3);*/
 
-    
+
     /*for (unsigned i = 0; i < MAX_THREADS; i++) {
       hashtable_t *hashtable = ht_create(ht_len, MAX_MUTEXES); //65536
       node_t *heap = malloc(sizeof(node_t) * 10000000);
