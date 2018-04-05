@@ -3,12 +3,20 @@
 #include <stdlib.h>
 #include <cuda.h>
 #include <cublas_v2.h>
+#include <curand_kernel.h>
 
-/*
- * M = # of rows
- * N = # of columns
- */
-//int N = 1024;
+#define THREAD_COUNT 16
+#define BLOCK_DIM_X  32
+#define BLOCK_DIM_Y  32
+
+__global__ void
+gen_i(float *dA, uint16_t N)
+{
+    int i = blockDim.x * blockIdx.x + threadIdx.x;
+    if (i < N) {
+        dA[i + N * i] = 1;
+    }
+}
 
 void gen_identity (float *A, uint16_t N) {
   for (uint16_t i = 0; i < N; i++) {
@@ -70,135 +78,101 @@ int mm_eq (float *A, float *B, uint16_t N) {
 
 int main(int argc, char **argv)
 {
+
+    dim3 blockDim1(BLOCK_DIM_X, 1);  
     cublasOperation_t trans = CUBLAS_OP_N;
-    //int row;
+
+    curandGenerator_t prng;
+    curandCreateGenerator(&prng, CURAND_RNG_PSEUDO_XORWOW);
+    curandSetPseudoRandomGeneratorSeed(prng, 100); //(unsigned long long) clock()
 
     float alpha = 1.0f;
-    float beta = 1.0f;
+    float beta = 0.0f;
 
-    float* O;
-    float* I;
-    float* X;
-    float* Y;
-    float *A, *dA;
-    float *B, *dB;
-    float *C, *dC;
-    float *D, *dD;
-    float *E, *dE;
-    float *F;//, *dF;
+    float *dA;
+    float *dB;
+    float *dC;
+    float *dX;
 
     cublasHandle_t handle = 0;
 
-    uint16_t N = 4;
+    uint16_t N = 10000;
     uint16_t N2 = 2 * N;
+    dim3 gridDim1((N2 + BLOCK_DIM_X - 1) / BLOCK_DIM_X, 1);
 
-    // Generate input
-    O = (float *) calloc(N * N, sizeof(float));
-    I = (float *) calloc(N * N, sizeof(float));
-    X = (float *) calloc(N * N, sizeof(float));
-    Y = (float *) calloc(N * N, sizeof(float));
-    A = (float *) calloc(N2 * N2, sizeof(float));
-    B = (float *) calloc(N2 * N2, sizeof(float));
-    C = (float *) calloc(N2 * N2, sizeof(float));
-    D = (float *) calloc(N2 * N2, sizeof(float));
-    E = (float *) calloc(N2 * N2, sizeof(float));
-    F = (float *) calloc(N2 * N2, sizeof(float));
-
-    srand(100);
-
-    gen_x(X, N);
-    copy_submat(Y, N, X, 0, 0, N);
-
-    // [I X]
-    // [O I]
-    gen_identity(A, N2);
-    copy_submat(A, N2, X, 0, N, N);
-
-    // [I -X]
-    // [O  I]
-    gen_identity(C, N2);
-    const_mult(Y, -1, 0, 0, N);
-    copy_submat(C, N2, Y, 0, N, N);
-
-    // [I 2X]
-    // [O -I]
-    gen_identity(B, N2);
-    const_mult(B, -1, N, N, N2);
-    const_mult(Y, -2, 0, 0, N);
-    copy_submat(B, N2, Y, 0, N, N);
-
-    free(O);
-    free(I);
-    free(X);
-    free(Y);
-
-    gen_identity(F, N2);
-    const_mult(F, -1, N, N, N2);
-
-
-    // A * B * C = D * C = E
-    //mm(A, B, D, N2);
-    //mm(D, C, E, N2);
-
-    // Create the cuSPARSE handle
+    // Create the cuBLAS handle
     CHECK_CUBLAS(cublasCreate(&handle));
+
+    CHECK(cudaMalloc((void **)&dX, sizeof(float) * N * N));
+
+    curandGenerateUniform(prng, dX, N * N);
 
     // Allocate device memory for vectors and the dense form for the matrices
     CHECK(cudaMalloc((void **)&dA, sizeof(float) * N2 * N2));
+    CHECK(cudaMemset(dA, 0, N2 * N2));
+    gen_i<<<gridDim1, blockDim1>>>(dA, N2);
+    CHECK_CUBLAS(cublasSetMatrix(N, N, sizeof(float), dX, N, (dA + 2 * N * N), N2));
+    CHECK(cudaDeviceSynchronize());
+
     CHECK(cudaMalloc((void **)&dB, sizeof(float) * N2 * N2));
-    CHECK(cudaMalloc((void **)&dD, sizeof(float) * N2 * N2));
+    CHECK(cudaMemset(dA, 0, N2 * N2));
+    gen_i<<<gridDim1, blockDim1>>>(dA, N2);
+    alpha = -1.0f;
+    CHECK_CUBLAS(cublasSgeam(handle, trans, trans, N2, N,
+                 &alpha,
+                 (dA + 2 * N * N), N2,
+                 &beta,
+                 (dA + 2 * N * N), N2,
+                 (dA + 2 * N * N), N2));
+    CHECK_CUBLAS(cublasSetMatrix(N, N, sizeof(float), dX, N, (dA + 2 * N * N), N2));
+    alpha = 2.0f;
+    CHECK_CUBLAS(cublasSgeam(handle, trans, trans, N, N,
+                 &alpha,
+                 (dB + 2 * N * N), N2,
+                 &beta,
+                 (dB + 2 * N * N), N2,
+                 (dB + 2 * N *N), N2));
+    CHECK(cudaDeviceSynchronize());
+
+    CHECK(cudaFree(dX));
+
+    CHECK(cudaMalloc((void **)&dC, sizeof(float) * N2 * N2));
     //CHECK(cudaMalloc((void **)&dF, sizeof(float) * N2 * N2));
-
-    CHECK_CUBLAS(cublasSetMatrix(N2, N2, sizeof(float), A, N2, dA, N2));
-    CHECK_CUBLAS(cublasSetMatrix(N2, N2, sizeof(float), B, N2, dB, N2));
-    CHECK_CUBLAS(cublasSetMatrix(N2, N2, sizeof(float), D, N2, dD, N2));
-    //CHECK_CUBLAS(cublasSetMatrix(N2, N2, sizeof(float), F, N2, dF, N2));
-    // Transfer the dense matrices to the device
-    /*CHECK(cudaMemcpy(dA, A, sizeof(float) * N2 * N2, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(dB, B, sizeof(float) * N2 * N2, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(dC, C, sizeof(float) * N2 * N2, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(dD, D, sizeof(float) * N2 * N2, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(dE, E, sizeof(float) * N2 * N2, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(dF, F, sizeof(float) * N2 * N2, cudaMemcpyHostToDevice));*/
-
-    free(A);
-    free(B);
-    free(D);
 
     CHECK_CUBLAS(cublasSgemm(handle, trans, trans, N2, N2, N2,
                              &alpha,
                              dA, N2,
                              dB, N2,
                              &beta,
-                             dD, N2));
+                             dC, N2));
 
-    CHECK(cudaFree(dA));
-    CHECK(cudaFree(dB));
+    alpha = -1.0f;
+    CHECK_CUBLAS(cublasSgeam(handle, trans, trans, N, N,
+                 &alpha,
+                 (dA + 2 * N * N), N2,
+                 &beta,
+                 (dA + 2 * N * N), N2,
+                 (dA + 2 * N *N), N2));
 
-    CHECK(cudaMalloc((void **)&dC, sizeof(float) * N2 * N2));
-    CHECK(cudaMalloc((void **)&dE, sizeof(float) * N2 * N2));
-    CHECK_CUBLAS(cublasSetMatrix(N2, N2, sizeof(float), C, N2, dC, N2));
-    CHECK_CUBLAS(cublasSetMatrix(N2, N2, sizeof(float), E, N2, dE, N2));
-    free(C);
 
     CHECK_CUBLAS(cublasSgemm(handle, trans, trans, N2, N2, N2,
                              &alpha,
-                             dD, N2,
                              dC, N2,
+                             dA, N2,
                              &beta,
-                             dE, N2));
+                             dB, N2));
 
     // Copy the result vector back to the host
-    CHECK(cudaMemcpy(E, dE, sizeof(float) * N2 * N2, cudaMemcpyDeviceToHost));
+//    CHECK(cudaMemcpy(E, dE, sizeof(float) * N2 * N2, cudaMemcpyDeviceToHost));
 
+    CHECK(cudaFree(dA));
+    CHECK(cudaFree(dB));
     CHECK(cudaFree(dC));
-    CHECK(cudaFree(dD));
-    CHECK(cudaFree(dE));
 
-    printf("Equal: %d\n", mm_eq(E, F, N2));
+    //printf("Error: %d\n", mm_eq(E, F, N2));
 
-    free(E);
-    free(F);
+    //free(E);
+    //free(F);
 
     //CHECK(cudaFree(dF));
 

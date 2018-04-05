@@ -96,7 +96,7 @@ int mm_eq (float *A, float *B, uint16_t N) {
 
 int main(int argc, char **argv) {
   double t;
-  uint16_t N = 10000;
+  uint16_t N = 1000;
   uint16_t N2 = 2 * N;
 
   float* O;
@@ -151,13 +151,13 @@ int main(int argc, char **argv) {
   printf("Init: %.1f\n", seconds() - t);
 
   t = seconds();
-  //mm(A, B, D, N2);
-  matMul(N2, A, B, D);
+  mm(A, B, D, N2);
+  //matMul(N2, A, B, D);
   printf("mm1: %.1f\n", seconds() - t);
 
   t = seconds();
-  //mm(D, C, E, N2);
-  matMul(N2, D, C, E);
+  mm(D, C, E, N2);
+  //matMul(N2, D, C, E);
   printf("mm2: %.1f\n",  seconds() - t);
 
   t = seconds();
