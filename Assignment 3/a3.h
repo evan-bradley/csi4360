@@ -27,24 +27,26 @@ scale_submat(float *dA, float alpha, uint16_t N, uint16_t start_i, uint16_t star
     }
 }
 
-__global__ void reduce0(float *g_idata0, float *g_idata1, float *g_odata, uint16_t n) {
-    extern __shared__ int sdata[];
+__global__ void
+reduce(float *g_idata0, float *g_idata1, float *g_odata, uint16_t n) {
+    extern __shared__ float sdata[];
     // each thread loads one element from global to shared mem
     unsigned int tid = threadIdx.x;
     unsigned int i = blockIdx.x*blockDim.x + threadIdx.x;
-    //printf("tid: %u\ti: %u\n", tid, i);
 
-    //printf("i: %u, n: %u\n", i, n);
-    //sdata[tid] = abs(g_idata0[i] - g_idata1[i]);
-    sdata[tid] = (i < n) ? fabsf(g_idata0[i] - g_idata1[i]) : 0;
-    //printf("%f\n", sdata[tid]);
+    if (i >= n * n) return;
+
+    sdata[tid] = fabsf(g_idata0[i] - g_idata1[i]);
     __syncthreads();
 
     // do reduction in shared mem
-    for(unsigned int s=1; s < blockDim.x; s *= 2) {
-        if (tid % (2*s) == 0) {
-            sdata[tid] += sdata[tid + s];
+    for(unsigned int s = 1; s < blockDim.x; s *= 2) {
+        unsigned int index = 2 * s * tid;
+
+        if (index < blockDim.x) {
+            sdata[index] += sdata[index + s];
         }
+
         __syncthreads();
     }
 
@@ -56,7 +58,7 @@ template <unsigned int blockSize>
 __global__ void
 reduce6(float *g_idata0, float *g_idata1, float *g_odata, unsigned int n)
 {
-    extern __shared__ int sdata[];
+    extern __shared__ float sdata[];
 
     unsigned int tid = threadIdx.x;
     unsigned int i = blockIdx.x*(blockSize*2) + tid;
